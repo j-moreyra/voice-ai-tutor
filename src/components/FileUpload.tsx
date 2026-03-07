@@ -7,12 +7,22 @@ interface FileUploadProps {
   onUploadComplete: () => void
 }
 
+type UploadStage = 'extracting' | 'uploading' | 'processing' | null
+
+const STAGE_LABELS: Record<Exclude<UploadStage, null>, string> = {
+  extracting: 'Extracting text...',
+  uploading: 'Uploading file...',
+  processing: 'Structuring content...',
+}
+
 export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const { user } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [stage, setStage] = useState<UploadStage>(null)
   const [error, setError] = useState('')
+
+  const busy = stage !== null
 
   const handleFile = useCallback(async (file: File) => {
     setError('')
@@ -25,9 +35,9 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
 
     if (!user) return
 
-    setUploading(true)
-    const { error: uploadError } = await uploadMaterial(user.id, file)
-    setUploading(false)
+    setStage('extracting')
+    const { error: uploadError } = await uploadMaterial(user.id, file, setStage)
+    setStage(null)
 
     if (uploadError) {
       setError(uploadError)
@@ -70,7 +80,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           dragging
             ? 'border-blue-500 bg-blue-500/5'
             : 'border-slate-700 hover:border-slate-600'
-        } ${uploading ? 'pointer-events-none opacity-50' : ''}`}
+        } ${busy ? 'pointer-events-none opacity-50' : ''}`}
       >
         <svg
           className="mx-auto mb-3 h-10 w-10 text-slate-500"
@@ -86,8 +96,8 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           />
         </svg>
 
-        {uploading ? (
-          <p className="text-sm text-slate-400">Uploading...</p>
+        {stage ? (
+          <p className="text-sm text-slate-400">{STAGE_LABELS[stage]}</p>
         ) : (
           <>
             <p className="text-sm text-slate-300">

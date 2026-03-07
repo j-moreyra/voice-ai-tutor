@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { extractText } from './extract'
 import type { Material, Chapter, Section, Concept, FileType } from '../types/database'
 
 const ACCEPTED_TYPES: Record<string, FileType> = {
@@ -23,7 +24,27 @@ export function getFileType(file: File): FileType {
   return ACCEPTED_TYPES[file.type]!
 }
 
-export async function uploadMaterial(userId: string, file: File): Promise<{ error: string | null }> {
+export async function uploadMaterial(
+  userId: string,
+  file: File,
+  onProgress?: (stage: 'extracting' | 'uploading' | 'processing') => void
+): Promise<{ error: string | null }> {
+  // 1. Extract text client-side
+  onProgress?.('extracting')
+  const fileType = getFileType(file)
+  let extractedText: string
+  try {
+    extractedText = await extractText(file, fileType)
+  } catch (err) {
+    return { error: `Text extraction failed: ${(err as Error).message}` }
+  }
+
+  if (!extractedText.trim()) {
+    return { error: 'Could not extract any text from this file. The file may be image-based or empty.' }
+  }
+
+  // 2. Upload file to storage
+  onProgress?.('uploading')
   const storagePath = `${userId}/${Date.now()}_${file.name}`
 
   const { error: storageError } = await supabase.storage
@@ -34,12 +55,13 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
     return { error: `Storage upload failed: ${storageError.message}` }
   }
 
+  // 3. Create material record
   const { data: material, error: insertError } = await supabase
     .from('materials')
     .insert({
       user_id: userId,
       file_name: file.name,
-      file_type: getFileType(file),
+      file_type: fileType,
       storage_path: storagePath,
       file_size_bytes: file.size,
     })
@@ -51,10 +73,14 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
     return { error: `Database insert failed: ${insertError.message}` }
   }
 
-  // Fire-and-forget: Edge Function processes the material asynchronously
+  // 4. Fire-and-forget: send extracted text to Edge Function for structuring
+  onProgress?.('processing')
   const { data: { session } } = await supabase.auth.getSession()
   supabase.functions.invoke('process-material', {
-    body: { material_id: (material as Material).id },
+    body: {
+      material_id: (material as Material).id,
+      extracted_text: extractedText,
+    },
     headers: {
       Authorization: `Bearer ${session?.access_token}`,
     },
