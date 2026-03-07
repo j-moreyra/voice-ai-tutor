@@ -34,22 +34,27 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
     return { error: storageError.message }
   }
 
-  // The Edge Function creates the materials row (using service_role to bypass RLS)
-  // and kicks off processing. The realtime subscription picks up the new row.
-  const { error: fnError } = await supabase.functions.invoke('process-material', {
-    body: {
-      userId,
-      storagePath,
-      fileName: file.name,
-      fileType: getFileType(file),
-      fileSizeBytes: file.size,
-    },
-  })
+  const { data: material, error: insertError } = await supabase
+    .from('materials')
+    .insert({
+      user_id: userId,
+      file_name: file.name,
+      file_type: getFileType(file),
+      storage_path: storagePath,
+      file_size_bytes: file.size,
+    })
+    .select()
+    .single()
 
-  if (fnError) {
+  if (insertError) {
     await supabase.storage.from('materials').remove([storagePath])
-    return { error: fnError.message }
+    return { error: insertError.message }
   }
+
+  // Fire-and-forget: Edge Function processes the material asynchronously
+  supabase.functions.invoke('process-material', {
+    body: { materialId: (material as Material).id },
+  })
 
   return { error: null }
 }
