@@ -135,11 +135,32 @@ Deno.serve(async (req) => {
 
     const mastery_summary = `${masteredCount}/${totalConcepts} mastered, ${strugglingConcepts.length} struggling, ${inProgressConcepts.length} in progress, ${skippedConcepts.length} skipped, ${totalConcepts - masteredCount - strugglingConcepts.length - inProgressConcepts.length - skippedConcepts.length} not started`
 
+    // Compute days since last session
+    const { data: lastSessionData } = await supabase
+      .from('sessions')
+      .select('started_at')
+      .eq('user_id', user.id)
+      .eq('material_id', material_id)
+      .neq('id', session_id)
+      .order('started_at', { ascending: false })
+      .limit(1)
+
+    let daysSinceLastSession = 'first session'
+    if (lastSessionData?.length) {
+      const lastDate = new Date(lastSessionData[0].started_at)
+      const now = new Date()
+      const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24))
+      daysSinceLastSession = diffDays === 0 ? 'today' : `${diffDays}`
+    }
+
     // Build dynamic variables for ElevenLabs
     const dynamicVariables = {
+      user_id: user.id,
+      session_id,
       student_name: profile.first_name,
       education_level: profile.education_level,
       session_type: session.session_type,
+      days_since_last_session: daysSinceLastSession,
       mastery_summary,
       concepts_struggling: strugglingConcepts.map((c) => c.title).join(', ') || 'None',
       concepts_skipped: skippedConcepts.map((c) => c.title).join(', ') || 'None',
