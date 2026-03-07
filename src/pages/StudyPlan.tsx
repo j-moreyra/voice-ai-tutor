@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchStudyPlan, subscribeStudyPlan } from '../lib/study'
 import type { StudyPlan as StudyPlanData, StudyChapter } from '../lib/study'
@@ -75,6 +75,7 @@ function ChapterAccordion({ chapter }: { chapter: StudyChapter }) {
 export default function StudyPlan() {
   const { materialId } = useParams<{ materialId: string }>()
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [plan, setPlan] = useState<StudyPlanData | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -139,8 +140,8 @@ export default function StudyPlan() {
         ))}
 
         <button
-          disabled
-          className="mt-6 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white opacity-50 cursor-not-allowed"
+          onClick={() => navigate(`/session/${materialId}`)}
+          className="mt-6 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700"
         >
           Start Studying
         </button>
