@@ -52,8 +52,12 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
   }
 
   // Fire-and-forget: Edge Function processes the material asynchronously
+  const { data: { session } } = await supabase.auth.getSession()
   supabase.functions.invoke('process-material', {
     body: { materialId: (material as Material).id },
+    headers: {
+      Authorization: `Bearer ${session?.access_token}`,
+    },
   })
 
   return { error: null }
