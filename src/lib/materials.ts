@@ -27,7 +27,8 @@ export function getFileType(file: File): FileType {
 export async function uploadMaterial(
   userId: string,
   file: File,
-  onProgress?: (stage: 'extracting' | 'uploading' | 'processing') => void
+  onProgress?: (stage: 'extracting' | 'uploading' | 'processing') => void,
+  onMaterialCreated?: () => void
 ): Promise<{ error: string | null }> {
   // 1. Extract text client-side
   onProgress?.('extracting')
@@ -73,10 +74,13 @@ export async function uploadMaterial(
     return { error: `Database insert failed: ${insertError.message}` }
   }
 
-  // 4. Send extracted text to Edge Function for structuring
-  onProgress?.('processing')
+  // 4. Notify caller so the material card appears immediately
+  onMaterialCreated?.()
+
+  // 5. Send extracted text to Edge Function for structuring.
+  //    Don't await — the Dashboard polls for status updates.
   const { data: { session } } = await supabase.auth.getSession()
-  const { error: processError } = await supabase.functions.invoke('process-material', {
+  supabase.functions.invoke('process-material', {
     body: {
       material_id: (material as Material).id,
       text_content: extractedText,
@@ -85,10 +89,6 @@ export async function uploadMaterial(
       Authorization: `Bearer ${session?.access_token}`,
     },
   })
-
-  if (processError) {
-    return { error: `Processing failed: ${processError.message}` }
-  }
 
   return { error: null }
 }

@@ -36,7 +36,12 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     if (!user) return
 
     setStage('extracting')
-    const { error: uploadError } = await uploadMaterial(user.id, file, setStage)
+    const { error: uploadError } = await uploadMaterial(
+      user.id,
+      file,
+      setStage,
+      onUploadComplete
+    )
     setStage(null)
 
     if (uploadError) {
