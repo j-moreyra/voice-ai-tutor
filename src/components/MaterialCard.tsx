@@ -45,6 +45,14 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
 
   const isClickable = material.processing_status === 'completed'
 
+  // Detect stuck processing (>3 minutes since last update)
+  const isStuck =
+    material.processing_status === 'processing' &&
+    Date.now() - new Date(material.updated_at).getTime() > 3 * 60 * 1000
+
+  const displayStatus = isStuck ? 'failed' : material.processing_status
+  const displayLabel = isStuck ? 'Stuck' : STATUS_LABELS[material.processing_status]
+
   return (
     <div
       onClick={() => isClickable && onSelect(material.id)}
@@ -61,12 +69,17 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
             <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
               {FILE_TYPE_LABELS[material.file_type] ?? material.file_type.toUpperCase()}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[material.processing_status]}`}>
-              {STATUS_LABELS[material.processing_status]}
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[displayStatus]}`}>
+              {displayLabel}
             </span>
           </div>
           {material.processing_status === 'failed' && material.processing_error && (
             <p className="mt-2 text-xs text-red-400">{material.processing_error}</p>
+          )}
+          {isStuck && (
+            <p className="mt-2 text-xs text-red-400">
+              Processing timed out. Delete and re-upload to try again.
+            </p>
           )}
         </div>
 
