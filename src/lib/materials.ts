@@ -73,10 +73,10 @@ export async function uploadMaterial(
     return { error: `Database insert failed: ${insertError.message}` }
   }
 
-  // 4. Fire-and-forget: send extracted text to Edge Function for structuring
+  // 4. Send extracted text to Edge Function for structuring
   onProgress?.('processing')
   const { data: { session } } = await supabase.auth.getSession()
-  supabase.functions.invoke('process-material', {
+  const { error: processError } = await supabase.functions.invoke('process-material', {
     body: {
       material_id: (material as Material).id,
       text_content: extractedText,
@@ -85,6 +85,10 @@ export async function uploadMaterial(
       Authorization: `Bearer ${session?.access_token}`,
     },
   })
+
+  if (processError) {
+    return { error: `Processing failed: ${processError.message}` }
+  }
 
   return { error: null }
 }
