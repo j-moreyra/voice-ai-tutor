@@ -28,6 +28,17 @@ export default function Dashboard() {
     return subscribeMaterials(user.id, loadMaterials)
   }, [user, loadMaterials])
 
+  // Poll every 3s while any material is still pending/processing
+  useEffect(() => {
+    const hasInProgress = materials.some(
+      (m) => m.processing_status === 'pending' || m.processing_status === 'processing'
+    )
+    if (!hasInProgress) return
+
+    const interval = setInterval(loadMaterials, 3000)
+    return () => clearInterval(interval)
+  }, [materials, loadMaterials])
+
   return (
     <div className="min-h-screen px-4 pb-8">
       <header className="mx-auto flex max-w-lg items-center justify-between py-5">
