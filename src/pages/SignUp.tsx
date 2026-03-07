@@ -101,8 +101,14 @@ export default function SignUp() {
           </div>
 
           <div>
-            <label htmlFor="educationLevel" className="mb-1 block text-sm font-medium text-slate-300">
-              Education level
+            <label htmlFor="educationLevel" className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-300">
+              What grade are you in?
+              <span
+                title="This helps us tailor explanations to your level."
+                className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-700 text-xs text-slate-400"
+              >
+                ?
+              </span>
             </label>
             <select
               id="educationLevel"
