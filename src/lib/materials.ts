@@ -31,7 +31,7 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
     .upload(storagePath, file, { upsert: false })
 
   if (storageError) {
-    return { error: storageError.message }
+    return { error: `Storage upload failed: ${storageError.message}` }
   }
 
   const { data: material, error: insertError } = await supabase
@@ -48,7 +48,7 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ erro
 
   if (insertError) {
     await supabase.storage.from('materials').remove([storagePath])
-    return { error: insertError.message }
+    return { error: `Database insert failed: ${insertError.message}` }
   }
 
   // Fire-and-forget: Edge Function processes the material asynchronously
