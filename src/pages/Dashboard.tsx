@@ -40,30 +40,37 @@ export default function Dashboard() {
   }, [materials, loadMaterials])
 
   return (
-    <div className="min-h-screen px-4 pb-8">
-      <header className="mx-auto flex max-w-lg items-center justify-between py-5">
-        <h1 className="text-lg font-bold text-slate-100">
-          {profile?.first_name ? `${profile.first_name}'s Materials` : 'Your Materials'}
-        </h1>
+    <div className="min-h-screen px-5 pb-10">
+      <header className="mx-auto flex max-w-[640px] items-center justify-between py-6">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-text">
+            {profile?.first_name ? `Hey ${profile.first_name}` : 'Your Materials'}
+          </h1>
+          <p className="mt-0.5 text-sm text-text-secondary">Ready to study?</p>
+        </div>
         <button
           onClick={signOut}
-          className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800 hover:text-slate-300"
+          className="btn-press rounded-btn border border-border px-3.5 py-2 text-sm text-text-secondary transition-colors hover:border-border-bright hover:text-text"
         >
           Sign out
         </button>
       </header>
 
-      <main className="mx-auto max-w-lg space-y-6">
+      <main className="mx-auto max-w-[640px] space-y-8 animate-fade-in">
         <FileUpload onUploadComplete={loadMaterials} />
 
         {loading ? (
-          <p className="py-8 text-center text-sm text-slate-500">Loading...</p>
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="skeleton-shimmer h-[72px] rounded-card" />
+            ))}
+          </div>
         ) : materials.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-500">
+          <p className="py-12 text-center text-sm text-text-muted">
             No materials yet. Upload a file to get started.
           </p>
         ) : (
-          <div className="space-y-3">
+          <div className="stagger-fade-in space-y-3">
             {materials.map((material) => (
               <MaterialCard
                 key={material.id}

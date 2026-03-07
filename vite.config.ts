@@ -13,8 +13,8 @@ export default defineConfig({
         name: 'Voice AI Tutor',
         short_name: 'AI Tutor',
         description: 'An AI-powered voice tutoring app that teaches from your course materials',
-        theme_color: '#0F172A',
-        background_color: '#0F172A',
+        theme_color: '#0A0A0F',
+        background_color: '#0A0A0F',
         display: 'standalone',
         icons: [
           {

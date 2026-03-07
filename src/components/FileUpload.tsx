@@ -81,36 +81,46 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onClick={() => fileInputRef.current?.click()}
-        className={`cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors ${
+        className={`cursor-pointer rounded-card border-2 border-dashed p-8 text-center transition-all duration-200 ${
           dragging
-            ? 'border-blue-500 bg-blue-500/5'
-            : 'border-slate-700 hover:border-slate-600'
-        } ${busy ? 'pointer-events-none opacity-50' : ''}`}
+            ? 'border-accent bg-accent-soft'
+            : 'border-border hover:border-border-bright hover:bg-surface/50'
+        } ${busy ? 'pointer-events-none opacity-60' : ''}`}
       >
-        <svg
-          className="mx-auto mb-3 h-10 w-10 text-slate-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={1.5}
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
-          />
-        </svg>
+        <div className={`mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl ${dragging ? 'bg-accent/20' : 'bg-surface'}`}>
+          <svg
+            className={`h-6 w-6 ${dragging ? 'text-accent' : 'text-text-muted'}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5"
+            />
+          </svg>
+        </div>
 
         {stage ? (
-          <p className="text-sm text-slate-400">{STAGE_LABELS[stage]}</p>
+          <div>
+            <div className="mx-auto mb-3 h-1 w-32 overflow-hidden rounded-full bg-surface">
+              <div className="h-full w-1/2 animate-shimmer rounded-full bg-accent" style={{ backgroundSize: '200% 100%', backgroundImage: 'linear-gradient(90deg, var(--color-accent) 0%, var(--color-accent-hover) 50%, var(--color-accent) 100%)' }} />
+            </div>
+            <p className="text-sm text-text-secondary">{STAGE_LABELS[stage]}</p>
+          </div>
         ) : (
           <>
-            <p className="text-sm text-slate-300">
+            <p className="text-sm font-medium text-text-secondary">
               Drop your file here or tap to browse
             </p>
-            <p className="mt-1 text-xs text-slate-500">
-              PDF, DOCX, or PPTX — up to 50MB
-            </p>
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <span className="rounded-md bg-surface px-2 py-0.5 text-xs text-text-muted">PDF</span>
+              <span className="rounded-md bg-surface px-2 py-0.5 text-xs text-text-muted">DOCX</span>
+              <span className="rounded-md bg-surface px-2 py-0.5 text-xs text-text-muted">PPTX</span>
+              <span className="text-xs text-text-muted">up to 50MB</span>
+            </div>
           </>
         )}
       </div>
@@ -124,9 +134,9 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       />
 
       {error && (
-        <p className="mt-3 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+        <div className="mt-4 animate-fade-in rounded-card bg-danger-soft px-4 py-3 text-sm text-danger">
           {error}
-        </p>
+        </div>
       )}
     </div>
   )

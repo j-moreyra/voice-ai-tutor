@@ -32,11 +32,17 @@ export default function MaterialDetail({ materialId }: MaterialDetailProps) {
   }
 
   if (loading) {
-    return <p className="py-4 text-center text-sm text-slate-500">Loading lesson plan...</p>
+    return (
+      <div className="space-y-2 py-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="skeleton-shimmer h-10 rounded-btn" />
+        ))}
+      </div>
+    )
   }
 
   if (!structure || structure.chapters.length === 0) {
-    return <p className="py-4 text-center text-sm text-slate-500">No content extracted.</p>
+    return <p className="py-6 text-center text-sm text-text-muted">No content extracted.</p>
   }
 
   return (
@@ -47,10 +53,10 @@ export default function MaterialDetail({ materialId }: MaterialDetailProps) {
           <div key={chapter.id}>
             <button
               onClick={() => toggleChapter(chapter.id)}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-200 hover:bg-slate-700/50"
+              className="flex w-full items-center gap-2.5 rounded-btn px-3 py-2.5 text-left text-sm font-medium text-text transition-colors hover:bg-surface-hover"
             >
               <svg
-                className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                className={`h-3.5 w-3.5 shrink-0 text-text-muted transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -62,17 +68,17 @@ export default function MaterialDetail({ materialId }: MaterialDetailProps) {
             </button>
 
             {isExpanded && (
-              <div className="ml-5 border-l border-slate-700 pl-4">
+              <div className="animate-fade-in ml-5 border-l border-border pl-4">
                 {chapter.sections.map((section, si) => (
-                  <div key={section.id} className="py-1">
-                    <p className="text-sm font-medium text-slate-300">
+                  <div key={section.id} className="py-1.5">
+                    <p className="text-sm font-medium text-text-secondary">
                       {ci + 1}.{si + 1} {section.title}
                     </p>
                     {section.concepts.length > 0 && (
                       <ul className="mt-1 space-y-0.5">
                         {section.concepts.map((concept) => (
-                          <li key={concept.id} className="flex items-center gap-2 py-0.5 pl-3 text-xs text-slate-400">
-                            <span className="h-1 w-1 shrink-0 rounded-full bg-slate-600" />
+                          <li key={concept.id} className="flex items-center gap-2 py-0.5 pl-3 text-xs text-text-muted">
+                            <span className="h-1 w-1 shrink-0 rounded-full bg-border-bright" />
                             {concept.title}
                           </li>
                         ))}
@@ -81,7 +87,7 @@ export default function MaterialDetail({ materialId }: MaterialDetailProps) {
                   </div>
                 ))}
                 {chapter.sections.length === 0 && (
-                  <p className="py-1 text-xs text-slate-500">No sections</p>
+                  <p className="py-1 text-xs text-text-muted">No sections</p>
                 )}
               </div>
             )}

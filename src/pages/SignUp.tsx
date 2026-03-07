@@ -43,20 +43,38 @@ export default function SignUp() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <h1 className="mb-2 text-2xl font-bold">Create your account</h1>
-        <p className="mb-6 text-slate-400">Start learning with your AI tutor</p>
+    <div className="flex min-h-screen items-center justify-center px-5">
+      <div className="w-full max-w-sm animate-fade-in">
+        {/* Branding */}
+        <div className="mb-10 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft">
+            <svg className="h-7 w-7 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+            </svg>
+          </div>
+          <h1 className="text-[28px] font-bold tracking-tight text-text">Voice AI Tutor</h1>
+          <p className="mt-1.5 text-sm text-text-secondary">Your AI Voice Tutor</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="mb-8 flex rounded-[10px] bg-surface p-1">
+          <Link to="/signin" className="flex-1 rounded-btn py-2.5 text-center text-sm font-medium text-text-muted transition-colors hover:text-text-secondary">
+            Sign in
+          </Link>
+          <div className="flex-1 rounded-btn bg-surface-hover py-2.5 text-center text-sm font-medium text-text">
+            Sign up
+          </div>
+        </div>
 
         {error && (
-          <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          <div className="mb-5 animate-fade-in rounded-card bg-danger-soft px-4 py-3 text-sm text-danger">
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="firstName" className="mb-1 block text-sm font-medium text-slate-300">
+            <label htmlFor="firstName" className="mb-2 block text-xs font-medium uppercase tracking-widest text-text-secondary">
               First name
             </label>
             <input
@@ -65,13 +83,13 @@ export default function SignUp() {
               required
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-base text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              className="h-[44px] w-full rounded-btn border border-border bg-input-bg px-4 text-base text-text placeholder-text-muted transition-colors"
               placeholder="Your first name"
             />
           </div>
 
           <div>
-            <label htmlFor="email" className="mb-1 block text-sm font-medium text-slate-300">
+            <label htmlFor="email" className="mb-2 block text-xs font-medium uppercase tracking-widest text-text-secondary">
               Email
             </label>
             <input
@@ -80,13 +98,13 @@ export default function SignUp() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-base text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              className="h-[44px] w-full rounded-btn border border-border bg-input-bg px-4 text-base text-text placeholder-text-muted transition-colors"
               placeholder="you@example.com"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="mb-1 block text-sm font-medium text-slate-300">
+            <label htmlFor="password" className="mb-2 block text-xs font-medium uppercase tracking-widest text-text-secondary">
               Password
             </label>
             <input
@@ -95,17 +113,17 @@ export default function SignUp() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-base text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              className="h-[44px] w-full rounded-btn border border-border bg-input-bg px-4 text-base text-text placeholder-text-muted transition-colors"
               placeholder="At least 6 characters"
             />
           </div>
 
           <div>
-            <label htmlFor="educationLevel" className="mb-1 flex items-center gap-1.5 text-sm font-medium text-slate-300">
-              What grade are you in?
+            <label htmlFor="educationLevel" className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-text-secondary">
+              Education level
               <span
                 title="This helps us tailor explanations to your level."
-                className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-slate-700 text-xs text-slate-400"
+                className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-surface-hover text-[10px] text-text-muted normal-case tracking-normal"
               >
                 ?
               </span>
@@ -114,7 +132,7 @@ export default function SignUp() {
               id="educationLevel"
               value={educationLevel}
               onChange={(e) => setEducationLevel(e.target.value as EducationLevel)}
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-base text-slate-100 focus:border-blue-500 focus:outline-none"
+              className="h-[44px] w-full rounded-btn border border-border bg-input-bg px-4 text-base text-text transition-colors"
             >
               {EDUCATION_LEVELS.map(({ value, label }) => (
                 <option key={value} value={value}>
@@ -127,15 +145,15 @@ export default function SignUp() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-lg bg-blue-600 px-4 py-3 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="btn-press h-[44px] w-full rounded-btn bg-accent text-base font-medium text-white shadow-[0_0_20px_var(--color-accent-glow)] transition-all duration-200 hover:bg-accent-hover hover:shadow-[0_0_25px_var(--color-accent-glow)] disabled:opacity-50"
           >
             {submitting ? 'Creating account...' : 'Sign up'}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-400">
+        <p className="mt-8 text-center text-sm text-text-muted">
           Already have an account?{' '}
-          <Link to="/signin" className="text-blue-400 hover:text-blue-300">
+          <Link to="/signin" className="text-accent hover:text-accent-hover">
             Sign in
           </Link>
         </p>
