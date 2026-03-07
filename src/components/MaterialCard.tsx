@@ -25,12 +25,11 @@ const FILE_TYPE_LABELS: Record<string, string> = {
 
 interface MaterialCardProps {
   material: Material
-  selected: boolean
   onSelect: (id: string) => void
   onDeleted: () => void
 }
 
-export default function MaterialCard({ material, selected, onSelect, onDeleted }: MaterialCardProps) {
+export default function MaterialCard({ material, onSelect, onDeleted }: MaterialCardProps) {
   const { user } = useAuth()
   const [deleting, setDeleting] = useState(false)
 
@@ -49,11 +48,9 @@ export default function MaterialCard({ material, selected, onSelect, onDeleted }
   return (
     <div
       onClick={() => isClickable && onSelect(material.id)}
-      className={`rounded-lg border p-4 transition-colors ${
-        selected
-          ? 'border-blue-500 bg-slate-800'
-          : 'border-slate-700 bg-slate-800'
-      } ${isClickable ? 'cursor-pointer hover:border-slate-600' : ''}`}
+      className={`rounded-lg border border-slate-700 bg-slate-800 p-4 transition-colors ${
+        isClickable ? 'cursor-pointer hover:border-slate-600' : ''
+      }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
