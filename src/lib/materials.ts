@@ -24,7 +24,7 @@ export function getFileType(file: File): FileType {
 }
 
 export async function uploadMaterial(userId: string, file: File): Promise<{ error: string | null }> {
-  const storagePath = `${userId}/${file.name}`
+  const storagePath = `${userId}/${Date.now()}_${file.name}`
 
   const { error: storageError } = await supabase.storage
     .from('materials')
