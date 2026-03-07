@@ -23,7 +23,7 @@ export function getFileType(file: File): FileType {
   return ACCEPTED_TYPES[file.type]!
 }
 
-export async function uploadMaterial(userId: string, file: File): Promise<{ data: Material | null; error: string | null }> {
+export async function uploadMaterial(userId: string, file: File): Promise<{ error: string | null }> {
   const storagePath = `${userId}/${file.name}`
 
   const { error: storageError } = await supabase.storage
@@ -31,33 +31,27 @@ export async function uploadMaterial(userId: string, file: File): Promise<{ data
     .upload(storagePath, file, { upsert: false })
 
   if (storageError) {
-    return { data: null, error: storageError.message }
+    return { error: storageError.message }
   }
 
-  const { data: material, error: insertError } = await supabase
-    .from('materials')
-    .insert({
-      user_id: userId,
-      file_name: file.name,
-      file_type: getFileType(file),
-      storage_path: storagePath,
-      file_size_bytes: file.size,
-    })
-    .select()
-    .single()
-
-  if (insertError) {
-    await supabase.storage.from('materials').remove([storagePath])
-    return { data: null, error: insertError.message }
-  }
-
-  const typedMaterial = material as Material
-
-  supabase.functions.invoke('process-material', {
-    body: { materialId: typedMaterial.id },
+  // The Edge Function creates the materials row (using service_role to bypass RLS)
+  // and kicks off processing. The realtime subscription picks up the new row.
+  const { error: fnError } = await supabase.functions.invoke('process-material', {
+    body: {
+      userId,
+      storagePath,
+      fileName: file.name,
+      fileType: getFileType(file),
+      fileSizeBytes: file.size,
+    },
   })
 
-  return { data: typedMaterial, error: null }
+  if (fnError) {
+    await supabase.storage.from('materials').remove([storagePath])
+    return { error: fnError.message }
+  }
+
+  return { error: null }
 }
 
 export async function fetchMaterials(userId: string): Promise<Material[]> {
