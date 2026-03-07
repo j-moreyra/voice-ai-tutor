@@ -1,5 +1,23 @@
 import type { FileType } from '../types/database'
 
+// Retry a dynamic import once after forcing a page reload to bust stale PWA/CDN cache.
+// On chunk load failure, we mark sessionStorage so we don't loop, then reload.
+async function importWithRetry<T>(importFn: () => Promise<T>, name: string): Promise<T> {
+  try {
+    return await importFn()
+  } catch (err) {
+    const key = `chunk-reload-${name}`
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, '1')
+      window.location.reload()
+      // Never resolves — page is reloading
+      return new Promise(() => {})
+    }
+    sessionStorage.removeItem(key)
+    throw err
+  }
+}
+
 export async function extractText(file: File, fileType: FileType): Promise<string> {
   switch (fileType) {
     case 'pdf':
@@ -14,7 +32,7 @@ export async function extractText(file: File, fileType: FileType): Promise<strin
 }
 
 async function extractPdfText(file: File): Promise<string> {
-  const pdfjsLib = await import('pdfjs-dist')
+  const pdfjsLib = await importWithRetry(() => import('pdfjs-dist'), 'pdfjs')
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
@@ -37,14 +55,14 @@ async function extractPdfText(file: File): Promise<string> {
 }
 
 async function extractDocxText(file: File): Promise<string> {
-  const mammoth = await import('mammoth')
+  const mammoth = await importWithRetry(() => import('mammoth'), 'mammoth')
   const buffer = await file.arrayBuffer()
   const result = await mammoth.default.extractRawText({ arrayBuffer: buffer })
   return result.value
 }
 
 async function extractPptxText(file: File): Promise<string> {
-  const JSZip = (await import('jszip')).default
+  const JSZip = (await importWithRetry(() => import('jszip'), 'jszip')).default
   const buffer = await file.arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
 
