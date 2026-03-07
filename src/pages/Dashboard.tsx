@@ -1,15 +1,15 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchMaterials, subscribeMaterials } from '../lib/materials'
 import type { Material } from '../types/database'
 import FileUpload from '../components/FileUpload'
 import MaterialCard from '../components/MaterialCard'
-import MaterialDetail from '../components/MaterialDetail'
 
 export default function Dashboard() {
   const { user, profile, signOut } = useAuth()
+  const navigate = useNavigate()
   const [materials, setMaterials] = useState<Material[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   const loadMaterials = useCallback(async () => {
@@ -27,8 +27,6 @@ export default function Dashboard() {
     if (!user) return
     return subscribeMaterials(user.id, loadMaterials)
   }, [user, loadMaterials])
-
-  const selectedMaterial = materials.find((m) => m.id === selectedId)
 
   return (
     <div className="min-h-screen px-4 pb-8">
@@ -59,21 +57,10 @@ export default function Dashboard() {
               <MaterialCard
                 key={material.id}
                 material={material}
-                selected={material.id === selectedId}
-                onSelect={(id) => setSelectedId(selectedId === id ? null : id)}
-                onDeleted={() => {
-                  if (selectedId === material.id) setSelectedId(null)
-                  loadMaterials()
-                }}
+                onSelect={(id) => navigate(`/study/${id}`)}
+                onDeleted={loadMaterials}
               />
             ))}
-          </div>
-        )}
-
-        {selectedMaterial?.processing_status === 'completed' && (
-          <div className="rounded-lg border border-slate-700 bg-slate-800 p-4">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Lesson Plan</h2>
-            <MaterialDetail materialId={selectedMaterial.id} />
           </div>
         )}
       </main>
