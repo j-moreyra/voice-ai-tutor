@@ -79,7 +79,7 @@ export async function uploadMaterial(
   supabase.functions.invoke('process-material', {
     body: {
       material_id: (material as Material).id,
-      extracted_text: extractedText,
+      text_content: extractedText,
     },
     headers: {
       Authorization: `Bearer ${session?.access_token}`,

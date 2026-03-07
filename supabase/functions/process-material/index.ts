@@ -99,9 +99,9 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401 })
   }
 
-  const { material_id, extracted_text } = await req.json()
-  if (!material_id || !extracted_text) {
-    return new Response(JSON.stringify({ error: 'Missing material_id or extracted_text' }), {
+  const { material_id, text_content } = await req.json()
+  if (!material_id || !text_content) {
+    return new Response(JSON.stringify({ error: 'Missing material_id or text_content' }), {
       status: 400,
     })
   }
@@ -126,9 +126,9 @@ Deno.serve(async (req) => {
   try {
     // Truncate text if extremely long (Claude context limits)
     const maxChars = 400_000
-    const text = extracted_text.length > maxChars
-      ? extracted_text.slice(0, maxChars) + '\n\n[Content truncated due to length]'
-      : extracted_text
+    const text = text_content.length > maxChars
+      ? text_content.slice(0, maxChars) + '\n\n[Content truncated due to length]'
+      : text_content
 
     // Call Claude to structure the content
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
