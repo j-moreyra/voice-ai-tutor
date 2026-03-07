@@ -136,8 +136,6 @@ export default function VoiceSession() {
   }, [user, materialId, handleEnd])
 
   const handleMuteToggle = () => {
-    // The SDK doesn't have a direct mute method, but we can set volume to 0
-    // For now, track the state — actual muting depends on SDK capabilities
     setMuted(!muted)
   }
 
@@ -147,19 +145,24 @@ export default function VoiceSession() {
 
   if (status === 'error') {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center px-4">
-        <div className="max-w-sm text-center">
-          <p className="text-sm text-red-400">{error}</p>
-          <div className="mt-4 flex gap-3 justify-center">
+      <div className="flex min-h-screen flex-col items-center justify-center px-5">
+        <div className="max-w-sm text-center animate-fade-in">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-danger-soft">
+            <svg className="h-6 w-6 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+            </svg>
+          </div>
+          <p className="text-sm text-text-secondary">{error}</p>
+          <div className="mt-6 flex gap-3 justify-center">
             <Link
               to={`/study/${materialId}`}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
+              className="btn-press rounded-btn border border-border px-4 py-2.5 text-sm text-text-secondary transition-colors hover:border-border-bright hover:text-text"
             >
               Back to Study Plan
             </Link>
             <button
               onClick={() => window.location.reload()}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+              className="btn-press rounded-btn bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
             >
               Try Again
             </button>
@@ -171,27 +174,29 @@ export default function VoiceSession() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
-        <p className="truncate text-sm font-medium text-slate-300">Study Session</p>
-        {status !== 'ended' && (
-          <button
-            onClick={handleEndClick}
-            className="rounded-lg border border-red-500/30 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/10"
-          >
-            End Session
-          </button>
-        )}
+      {/* Top bar - minimal */}
+      <header className="flex items-center justify-between px-5 py-4">
+        <Link
+          to={`/study/${materialId}`}
+          className="flex items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-text-secondary"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+          </svg>
+          Back
+        </Link>
+        <p className="text-sm font-medium text-text-secondary">Study Session</p>
+        <div className="w-12" /> {/* Spacer for centering */}
       </header>
 
       {/* Center: mode indicator */}
-      <main className="flex flex-1 items-center justify-center">
+      <main className="flex flex-1 items-center justify-center animate-fade-in">
         {status === 'ended' ? (
           <div className="text-center">
             <SessionStatus mode="ended" />
             <Link
               to={`/study/${materialId}`}
-              className="mt-6 inline-block rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+              className="btn-press mt-8 inline-block rounded-btn bg-accent px-6 py-3 text-sm font-medium text-white shadow-[0_0_20px_var(--color-accent-glow)] transition-all hover:bg-accent-hover"
             >
               Back to Study Plan
             </Link>
@@ -201,15 +206,22 @@ export default function VoiceSession() {
         )}
       </main>
 
-      {/* Bottom bar: mic control */}
+      {/* Bottom bar */}
       {status === 'connected' && (
-        <footer className="flex justify-center border-t border-slate-700 px-4 py-4">
+        <footer className="flex items-center justify-between px-5 py-5">
+          <button
+            onClick={handleEndClick}
+            className="text-sm text-text-muted transition-colors hover:text-danger"
+          >
+            End Session
+          </button>
+
           <button
             onClick={handleMuteToggle}
-            className={`rounded-full p-4 transition-colors ${
+            className={`btn-press rounded-full p-4 transition-all duration-200 ${
               muted
-                ? 'bg-red-500/20 text-red-400'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                ? 'bg-danger-soft text-danger'
+                : 'bg-surface text-text-secondary hover:bg-surface-hover'
             }`}
             title={muted ? 'Unmute' : 'Mute'}
           >
@@ -224,6 +236,8 @@ export default function VoiceSession() {
               </svg>
             )}
           </button>
+
+          <div className="w-16" /> {/* Spacer for centering mic button */}
         </footer>
       )}
     </div>

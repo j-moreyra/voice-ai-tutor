@@ -10,16 +10,16 @@ export default function ProgressBar({ stats }: ProgressBarProps) {
   const pct = (n: number) => `${(n / stats.total) * 100}%`
 
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-700">
-      <div className="flex h-full">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+      <div className="flex h-full transition-all duration-500">
         {stats.mastered > 0 && (
-          <div className="bg-green-500" style={{ width: pct(stats.mastered) }} />
+          <div className="bg-success" style={{ width: pct(stats.mastered) }} />
         )}
         {stats.inProgress > 0 && (
-          <div className="bg-blue-500" style={{ width: pct(stats.inProgress) }} />
+          <div className="bg-accent" style={{ width: pct(stats.inProgress) }} />
         )}
         {stats.struggling > 0 && (
-          <div className="bg-amber-500" style={{ width: pct(stats.struggling) }} />
+          <div className="bg-warning" style={{ width: pct(stats.struggling) }} />
         )}
       </div>
     </div>

@@ -4,15 +4,15 @@ import { deleteMaterial } from '../lib/materials'
 import { useAuth } from '../contexts/AuthContext'
 
 const STATUS_STYLES: Record<ProcessingStatus, string> = {
-  pending: 'bg-yellow-500/10 text-yellow-400',
-  processing: 'bg-blue-500/10 text-blue-400 animate-pulse',
-  completed: 'bg-green-500/10 text-green-400',
-  failed: 'bg-red-500/10 text-red-400',
+  pending: 'bg-warning-soft text-warning',
+  processing: 'bg-accent-soft text-accent',
+  completed: 'bg-success-soft text-success',
+  failed: 'bg-danger-soft text-danger',
 }
 
 const STATUS_LABELS: Record<ProcessingStatus, string> = {
   pending: 'Pending',
-  processing: 'Processing',
+  processing: 'Analyzing...',
   completed: 'Ready',
   failed: 'Failed',
 }
@@ -44,6 +44,7 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
   }
 
   const isClickable = material.processing_status === 'completed'
+  const isProcessing = material.processing_status === 'processing' || material.processing_status === 'pending'
 
   // Detect stuck processing (>3 minutes since last update)
   const isStuck =
@@ -56,29 +57,47 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
   return (
     <div
       onClick={() => isClickable && onSelect(material.id)}
-      className={`rounded-lg border border-slate-700 bg-slate-800 p-4 transition-colors ${
-        isClickable ? 'cursor-pointer hover:border-slate-600' : ''
-      }`}
+      className={`group rounded-card border border-border bg-surface p-5 transition-all duration-200 ${
+        isClickable
+          ? 'cursor-pointer hover:-translate-y-px hover:border-border-bright hover:shadow-lg hover:shadow-black/20'
+          : ''
+      } ${isProcessing && !isStuck ? 'border-accent/20' : ''}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-100">
+          <p className="truncate text-sm font-medium text-text">
             {material.file_name}
           </p>
-          <div className="mt-1.5 flex items-center gap-2">
-            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400">
+          <div className="mt-2 flex items-center gap-2">
+            <span className="rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-text-muted">
               {FILE_TYPE_LABELS[material.file_type] ?? material.file_type.toUpperCase()}
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[displayStatus]}`}>
+            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLES[displayStatus]}`}>
+              {isProcessing && !isStuck && (
+                <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+              )}
               {displayLabel}
             </span>
           </div>
+
+          {isProcessing && !isStuck && (
+            <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-surface-hover">
+              <div className="skeleton-shimmer h-full w-full rounded-full" />
+            </div>
+          )}
+
           {material.processing_status === 'failed' && material.processing_error && (
-            <p className="mt-2 text-xs text-red-400">{material.processing_error}</p>
+            <p className="mt-2.5 text-xs text-danger">{material.processing_error}</p>
           )}
           {isStuck && (
-            <p className="mt-2 text-xs text-red-400">
+            <p className="mt-2.5 text-xs text-danger">
               Processing timed out. Delete and re-upload to try again.
+            </p>
+          )}
+
+          {isClickable && (
+            <p className="mt-2.5 text-xs text-text-muted group-hover:text-accent">
+              View Study Plan &rarr;
             </p>
           )}
         </div>
@@ -86,7 +105,7 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="shrink-0 rounded p-1.5 text-slate-500 hover:bg-slate-700 hover:text-slate-300 disabled:opacity-50"
+          className="shrink-0 rounded-btn p-2 text-text-muted transition-colors hover:bg-surface-hover hover:text-text-secondary disabled:opacity-50"
           title="Delete material"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
