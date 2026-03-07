@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useParams, useSearchParams, Link } from 'react-router-dom'
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { determineSessionType, createSession, endSession, getSignedUrl } from '../lib/session'
 import { createSessionToolHandler } from '../lib/sessionTools'
@@ -20,9 +20,18 @@ export default function VoiceSession() {
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
 
+  const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
   const sessionIdRef = useRef<string | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
+
+  const stopMediaStream = useCallback(() => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop())
+      mediaStreamRef.current = null
+    }
+  }, [])
 
   const handleEnd = useCallback(
     async (reason: EndReason) => {
@@ -38,6 +47,8 @@ export default function VoiceSession() {
         // ignore cleanup errors
       }
 
+      stopMediaStream()
+
       if (sessionIdRef.current) {
         await endSession(sessionIdRef.current, reason)
       }
@@ -45,8 +56,13 @@ export default function VoiceSession() {
       setStatus('ended')
       setMode('ended')
     },
-    []
+    [stopMediaStream]
   )
+
+  const handleBack = useCallback(async () => {
+    await handleEnd('student_departure')
+    navigate(`/study/${materialId}`)
+  }, [handleEnd, navigate, materialId])
 
   useEffect(() => {
     if (!user || !materialId) return
@@ -55,8 +71,9 @@ export default function VoiceSession() {
 
     async function start() {
       try {
-        // Request mic permission early
-        await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Request mic permission early and store stream for cleanup
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        mediaStreamRef.current = stream
 
         if (cancelled) return
 
@@ -129,11 +146,12 @@ export default function VoiceSession() {
 
     return () => {
       cancelled = true
+      stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, handleEnd])
+  }, [user, materialId, handleEnd, stopMediaStream])
 
   const handleMuteToggle = () => {
     setMuted(!muted)
@@ -176,15 +194,15 @@ export default function VoiceSession() {
     <div className="flex min-h-screen flex-col">
       {/* Top bar - minimal */}
       <header className="flex items-center justify-between px-5 py-4">
-        <Link
-          to={`/study/${materialId}`}
+        <button
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-sm text-text-muted transition-colors hover:text-text-secondary"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
           </svg>
           Back
-        </Link>
+        </button>
         <p className="text-sm font-medium text-text-secondary">Study Session</p>
         <div className="w-12" /> {/* Spacer for centering */}
       </header>
