@@ -100,10 +100,15 @@ export async function endSession(
     .eq('id', sessionId)
 }
 
+export interface SignedUrlResult {
+  signedUrl: string
+  dynamicVariables: Record<string, string>
+}
+
 export async function getSignedUrl(
   materialId: string,
   sessionId: string
-): Promise<string> {
+): Promise<SignedUrlResult> {
   const {
     data: { session },
   } = await supabase.auth.getSession()
@@ -116,5 +121,8 @@ export async function getSignedUrl(
   })
 
   if (error) throw new Error(`Failed to get signed URL: ${error.message}`)
-  return data.signed_url
+  return {
+    signedUrl: data.signed_url,
+    dynamicVariables: data.dynamic_variables,
+  }
 }

@@ -169,14 +169,10 @@ Deno.serve(async (req) => {
 
     const { signed_url } = await elevenLabsRes.json()
 
-    // Append dynamic variables as query parameters to the signed URL
-    const signedUrlObj = new URL(signed_url)
-    for (const [key, value] of Object.entries(dynamicVariables)) {
-      signedUrlObj.searchParams.set(key, value)
-    }
-
+    // Return signed URL + dynamic variables separately
+    // Dynamic variables are passed client-side to Conversation.startSession()
     return new Response(
-      JSON.stringify({ signed_url: signedUrlObj.toString() }),
+      JSON.stringify({ signed_url, dynamic_variables: dynamicVariables }),
       {
         headers: {
           'Content-Type': 'application/json',

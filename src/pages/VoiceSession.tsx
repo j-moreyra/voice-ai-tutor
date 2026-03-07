@@ -66,9 +66,9 @@ export default function VoiceSession() {
         sessionIdRef.current = session.id
         if (cancelled) return
 
-        // Get signed URL from Edge Function
+        // Get signed URL + dynamic variables from Edge Function
         setStatus('connecting')
-        const signedUrl = await getSignedUrl(materialId!, session.id)
+        const { signedUrl, dynamicVariables } = await getSignedUrl(materialId!, session.id)
         if (cancelled) return
 
         // Create client tool handler
@@ -77,6 +77,7 @@ export default function VoiceSession() {
         // Start ElevenLabs conversation
         const conversation = await Conversation.startSession({
           signedUrl,
+          dynamicVariables,
           clientTools: {
             update_session_state: toolHandler,
           },
