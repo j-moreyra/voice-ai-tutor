@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { determineSessionType, createSession, endSession, getSignedUrl } from '../lib/session'
 import { createSessionToolHandler } from '../lib/sessionTools'
@@ -12,6 +12,8 @@ type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
 
 export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
+  const [searchParams] = useSearchParams()
+  const chapterId = searchParams.get('chapterId') ?? undefined
   const { user } = useAuth()
   const [status, setStatus] = useState<Status>('initializing')
   const [mode, setMode] = useState<Mode>('connecting')
@@ -62,7 +64,7 @@ export default function VoiceSession() {
         const sessionType = await determineSessionType(user!.id, materialId!)
         if (cancelled) return
 
-        const session = await createSession(user!.id, materialId!, sessionType)
+        const session = await createSession(user!.id, materialId!, sessionType, chapterId)
         sessionIdRef.current = session.id
         if (cancelled) return
 

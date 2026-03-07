@@ -71,7 +71,8 @@ export async function determineSessionType(
 export async function createSession(
   userId: string,
   materialId: string,
-  sessionType: SessionType
+  sessionType: SessionType,
+  chapterId?: string
 ): Promise<Session> {
   const { data, error } = await supabase
     .from('sessions')
@@ -79,6 +80,7 @@ export async function createSession(
       user_id: userId,
       material_id: materialId,
       session_type: sessionType,
+      ...(chapterId ? { current_chapter_id: chapterId } : {}),
     })
     .select()
     .single()

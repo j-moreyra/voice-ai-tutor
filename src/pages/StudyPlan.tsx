@@ -6,9 +6,15 @@ import type { StudyPlan as StudyPlanData, StudyChapter } from '../lib/study'
 import MasteryBadge from '../components/MasteryBadge'
 import ProgressBar from '../components/ProgressBar'
 
-function ChapterAccordion({ chapter }: { chapter: StudyChapter }) {
-  const [open, setOpen] = useState(false)
-
+function ChapterAccordion({
+  chapter,
+  expanded,
+  onToggle,
+}: {
+  chapter: StudyChapter
+  expanded: boolean
+  onToggle: () => void
+}) {
   const conceptCount = chapter.sections.reduce((n, s) => n + s.concepts.length, 0)
   const masteredCount = chapter.sections.reduce(
     (n, s) => n + s.concepts.filter((c) => c.mastery === 'mastered').length,
@@ -18,7 +24,7 @@ function ChapterAccordion({ chapter }: { chapter: StudyChapter }) {
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         className="flex w-full items-center justify-between gap-3 p-4 text-left"
       >
         <div className="min-w-0 flex-1">
@@ -40,7 +46,7 @@ function ChapterAccordion({ chapter }: { chapter: StudyChapter }) {
             </span>
           )}
           <svg
-            className={`h-4 w-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`}
+            className={`h-4 w-4 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -51,7 +57,7 @@ function ChapterAccordion({ chapter }: { chapter: StudyChapter }) {
         </div>
       </button>
 
-      {open && (
+      {expanded && (
         <div className="border-t border-slate-700 px-4 pb-4 pt-3">
           {chapter.sections.map((section) => (
             <div key={section.id} className="mt-3 first:mt-0">
@@ -78,6 +84,7 @@ export default function StudyPlan() {
   const navigate = useNavigate()
   const [plan, setPlan] = useState<StudyPlanData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [expandedChapterId, setExpandedChapterId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!user || !materialId) return
@@ -136,14 +143,33 @@ export default function StudyPlan() {
 
       <main className="mx-auto max-w-lg space-y-3">
         {plan.chapters.map((chapter) => (
-          <ChapterAccordion key={chapter.id} chapter={chapter} />
+          <ChapterAccordion
+            key={chapter.id}
+            chapter={chapter}
+            expanded={expandedChapterId === chapter.id}
+            onToggle={() =>
+              setExpandedChapterId(expandedChapterId === chapter.id ? null : chapter.id)
+            }
+          />
         ))}
 
         <button
-          onClick={() => navigate(`/session/${materialId}`)}
-          className="mt-6 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700"
+          onClick={() => {
+            const targetChapterId =
+              expandedChapterId ??
+              plan.chapters.find((ch) =>
+                ch.sections.some((s) => s.concepts.some((c) => c.mastery !== 'mastered'))
+              )?.id ??
+              plan.chapters[0]?.id
+            if (targetChapterId) {
+              navigate(`/session/${materialId}?chapterId=${targetChapterId}`)
+            }
+          }}
+          className="mt-6 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-500"
         >
-          Start Studying
+          {expandedChapterId
+            ? `Start from: ${plan.chapters.find((ch) => ch.id === expandedChapterId)?.title}`
+            : 'Start Studying'}
         </button>
       </main>
     </div>
