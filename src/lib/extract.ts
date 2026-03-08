@@ -179,3 +179,5 @@ function extractXmlText(xml: string): string {
   }
   return texts.join(' ')
 }
+
+export { extractXmlText }
