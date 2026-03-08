@@ -17,19 +17,16 @@
 
 ## 2. Current Status
 
-**Branch:** `claude/review-voice-app-docs-FwJtb` — clean working tree
+**Branch:** `claude/general-session-d5L9Z` — clean working tree
 
-**Recent completed work (last 10 commits):**
-- ElevenLabs env vars and dynamic variables integration
-- Mic recording cleanup on navigation away from voice session
-- Complete UI/UX dark theme overhaul
-- Material card immediate display after DB row creation
-- Polling for material processing status updates
-- Chunk load retry with auto-reload for stale PWA cache
-- Edge Function response handling and stuck processing state recovery
-- Field rename (`extracted_text` → `text_content`) to match Edge Function contract
-- Client-side file text extraction (pdfjs-dist, mammoth, jszip)
-- Context-aware "Start Studying" button with chapter targeting
+**Recent completed work (this branch, from `main`):**
+- Fix `days_since_last_session` to use `ended_at` when available
+- Fix orphaned sessions, cosmetic mute bug, and missing study material
+- Add unit tests for `extractXmlText` and `validateFile`
+- Improve file extraction: password detection, scanned PDF check, chart/diagram text
+- Extract speaker notes and decode HTML entities in PPTX extraction
+- Improve session resumption logic with orphan detection and time threshold
+- Add error boundaries and hardening to voice session
 
 **No active blockers.** All features committed and working.
 
@@ -42,15 +39,16 @@
 - **Supabase RLS on all tables** — security enforced at DB level
 - **Teach-Check pattern** — 15-45 second voice chunks with mastery tracking per concept
 
-## 4. Next Steps
+## 4. Pending / Next Steps
 
-- [ ] Review and validate voice session flow end-to-end (VoiceSession.tsx:1-250)
+- [ ] **Deploy `get-signed-url` Edge Function** — requires Supabase login (`npx supabase login`) then: `npx supabase functions deploy get-signed-url --project-ref rfnxdtyzadsubosekefm`
+- [ ] Review and validate voice session flow end-to-end (VoiceSession.tsx)
 - [ ] Verify `update-session-state` Edge Function integration with ElevenLabs tool calls
-- [ ] Add error boundaries around voice session components
-- [ ] Test material processing pipeline with edge-case file formats
 - [ ] Validate mastery state transitions match system prompt spec (see `Voice_AI_Tutor_System_Prompt_v1.0.md`)
-- [ ] Review session resumption logic in `src/lib/session.ts` for disconnected/returning states
-- [ ] Consider adding unit tests for `src/lib/extract.ts` and `src/lib/materials.ts`
+- [ ] Test material processing pipeline with edge-case file formats
+- [x] Add error boundaries around voice session components
+- [x] Review session resumption logic in `src/lib/session.ts` for disconnected/returning states
+- [x] Add unit tests for `src/lib/extract.ts`
 
 ## 5. Context Notes
 
@@ -59,4 +57,6 @@
 - **Key types:** `src/types/database.ts` defines all DB table interfaces
 - **Mastery states:** `not_started | in_progress | struggling | mastered | skipped`
 - **Session types:** `first_session | returning | returning_completed | disconnected`
+- **Edge Functions:** `supabase/functions/get-signed-url` and `supabase/functions/process-material`
+- **Deploy blocked:** Supabase CLI requires authentication — run `npx supabase login` to authenticate before deploying Edge Functions
 - **Pruning note:** The `.docx` spec files in root are reference-only; all actionable specs are captured in `database-schema.md` and the system prompt markdown
