@@ -140,7 +140,7 @@ Deno.serve(async (req) => {
     // Compute days since last session
     const { data: lastSessionData } = await supabase
       .from('sessions')
-      .select('started_at')
+      .select('started_at, ended_at')
       .eq('user_id', user.id)
       .eq('material_id', material_id)
       .neq('id', session_id)
@@ -149,7 +149,7 @@ Deno.serve(async (req) => {
 
     let daysSinceLastSession = 'first session'
     if (lastSessionData?.length) {
-      const lastDate = new Date(lastSessionData[0].started_at)
+      const lastDate = new Date(lastSessionData[0].ended_at ?? lastSessionData[0].started_at)
       const now = new Date()
       const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24))
       daysSinceLastSession = diffDays === 0 ? 'today' : `${diffDays}`
