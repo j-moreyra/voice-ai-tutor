@@ -41,7 +41,11 @@ export async function uploadMaterial(
   }
 
   if (!extractedText.trim()) {
-    return { error: 'Could not extract any text from this file. The file may be image-based or empty.' }
+    return { error: 'Could not extract any text from this file. The file may be image-based, empty, or contain only diagrams. Try a text-based version of the file.' }
+  }
+
+  if (extractedText.trim().length < 100) {
+    return { error: 'Very little text was extracted from this file. The file may be mostly images or diagrams. Voice tutoring works best with text-heavy materials.' }
   }
 
   // 2. Upload file to storage

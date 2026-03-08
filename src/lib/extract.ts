@@ -39,7 +39,16 @@ async function extractPdfText(file: File): Promise<string> {
   ).toString()
 
   const buffer = await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+  let pdf
+  try {
+    pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+  } catch (err) {
+    const message = (err as Error).message || ''
+    if (message.includes('password')) {
+      throw new Error('This PDF is password-protected. Please remove the password and try again.')
+    }
+    throw err
+  }
 
   const pages: string[] = []
   for (let i = 1; i <= pdf.numPages; i++) {
@@ -51,7 +60,13 @@ async function extractPdfText(file: File): Promise<string> {
     pages.push(text)
   }
 
-  return pages.join('\n\n')
+  const result = pages.join('\n\n')
+  if (!result.trim()) {
+    throw new Error(
+      'This PDF appears to be scanned or image-based. Text-based PDFs are required — try re-saving it with OCR enabled, or use a tool like Adobe Acrobat to make it searchable.'
+    )
+  }
+  return result
 }
 
 async function extractDocxText(file: File): Promise<string> {
@@ -100,6 +115,37 @@ async function extractPptxText(file: File): Promise<string> {
       }
       slide.notes = text
     }
+
+    // Extract chart text
+    const chartMatch = path.match(/^ppt\/charts\/chart\d+\.xml$/)
+    if (chartMatch) {
+      const xml = await zipEntry.async('text')
+      // Chart values and labels use <c:v> tags
+      const chartTexts: string[] = []
+      const chartRegex = /<c:v>([\s\S]*?)<\/c:v>/g
+      let cm
+      while ((cm = chartRegex.exec(xml)) !== null) {
+        const val = cm[1].trim()
+        // Skip pure numbers — we want labels, not data points
+        if (val && isNaN(Number(val))) chartTexts.push(val)
+      }
+      // Charts aren't tied to a specific slide easily, append to last slide
+      if (chartTexts.length && slides.length) {
+        slides[slides.length - 1].text += ' ' + chartTexts.join(' ')
+      }
+      continue
+    }
+
+    // Extract diagram/SmartArt text
+    const diagramMatch = path.match(/^ppt\/diagrams\/data\d+\.xml$/)
+    if (diagramMatch) {
+      const xml = await zipEntry.async('text')
+      const diagText = extractXmlText(xml)
+      if (diagText && slides.length) {
+        slides[slides.length - 1].text += ' ' + diagText
+      }
+      continue
+    }
   }
 
   slides.sort((a, b) => a.index - b.index)
@@ -118,7 +164,8 @@ async function extractPptxText(file: File): Promise<string> {
 // Helper: extract text from PPTX XML and decode HTML entities
 function extractXmlText(xml: string): string {
   const texts: string[] = []
-  const regex = /<a:t>([^<]*)<\/a:t>/g
+  // Match <a:t> tags — covers normal text, grouped shapes, and fallback content
+  const regex = /<a:t>([\s\S]*?)<\/a:t>/g
   let m
   while ((m = regex.exec(xml)) !== null) {
     const decoded = m[1]
@@ -127,7 +174,8 @@ function extractXmlText(xml: string): string {
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&apos;/g, "'")
-    if (decoded.trim()) texts.push(decoded)
+      .replace(/\s+/g, ' ')
+    if (decoded.trim()) texts.push(decoded.trim())
   }
   return texts.join(' ')
 }
