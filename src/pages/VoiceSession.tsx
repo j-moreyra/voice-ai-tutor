@@ -25,6 +25,12 @@ export default function VoiceSession() {
   const sessionIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
+  const connectedAtRef = useRef<number | null>(null)
+  const statusRef = useRef<Status>('initializing')
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
 
   const stopMediaStream = useCallback(() => {
     if (mediaStreamRef.current) {
@@ -49,8 +55,12 @@ export default function VoiceSession() {
 
       stopMediaStream()
 
-      if (sessionIdRef.current) {
-        await endSession(sessionIdRef.current, reason)
+      try {
+        if (sessionIdRef.current) {
+          await endSession(sessionIdRef.current, reason)
+        }
+      } catch (err) {
+        console.error('Failed to persist session end (non-fatal):', err)
       }
 
       setStatus('ended')
@@ -70,6 +80,15 @@ export default function VoiceSession() {
     let cancelled = false
 
     async function start() {
+      // Timeout after 30 seconds if we can't connect
+      const timeoutId = setTimeout(() => {
+        if (!cancelled && (statusRef.current === 'initializing' || statusRef.current === 'connecting')) {
+          setError('Connection timed out. Please check your internet connection and try again.')
+          setStatus('error')
+          stopMediaStream()
+        }
+      }, 30000)
+
       try {
         // Request mic permission early and store stream for cleanup
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -102,13 +121,31 @@ export default function VoiceSession() {
           },
           onConnect: () => {
             if (!cancelled) {
+              connectedAtRef.current = Date.now()
               setStatus('connected')
               setMode('listening')
             }
           },
           onDisconnect: () => {
             if (!cancelled && !endedRef.current) {
-              handleEnd('disconnected')
+              const connectedDuration = connectedAtRef.current
+                ? (Date.now() - connectedAtRef.current) / 1000
+                : 0
+
+              if (connectedDuration < 30) {
+                // Session ended suspiciously fast — likely credit/config issue
+                setError(
+                  'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
+                )
+                setStatus('error')
+                endedRef.current = true
+                stopMediaStream()
+                if (sessionIdRef.current) {
+                  endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+                }
+              } else {
+                handleEnd('disconnected')
+              }
             }
           },
           onModeChange: (newMode: { mode: string }) => {
@@ -133,12 +170,19 @@ export default function VoiceSession() {
         conversationRef.current = conversation
       } catch (err) {
         if (cancelled) return
+        // Clean up orphaned session row if one was created before the failure
+        if (sessionIdRef.current) {
+          endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+        }
+        stopMediaStream()
         const message =
           err instanceof DOMException && err.name === 'NotAllowedError'
             ? 'Microphone access is required for voice sessions. Please allow microphone access and try again.'
             : `Failed to start session: ${(err as Error).message}`
         setError(message)
         setStatus('error')
+      } finally {
+        clearTimeout(timeoutId)
       }
     }
 
@@ -154,7 +198,14 @@ export default function VoiceSession() {
   }, [user, materialId, handleEnd, stopMediaStream])
 
   const handleMuteToggle = () => {
-    setMuted(!muted)
+    const next = !muted
+    setMuted(next)
+    // Actually mute/unmute the mic by toggling audio track enabled state
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !next
+      })
+    }
   }
 
   const handleEndClick = () => {

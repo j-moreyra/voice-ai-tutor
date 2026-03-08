@@ -51,10 +51,11 @@ Deno.serve(async (req) => {
     }
 
     // Fetch all context from DB in parallel
-    const [profileRes, sessionRes, chaptersRes, sectionsRes, conceptsRes, masteryRes, questionsRes] =
+    const [profileRes, sessionRes, materialRes, chaptersRes, sectionsRes, conceptsRes, masteryRes, questionsRes] =
       await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('sessions').select('*').eq('id', session_id).single(),
+        supabase.from('materials').select('extracted_text').eq('id', material_id).single(),
         supabase.from('chapters').select('*').eq('material_id', material_id).order('sort_order'),
         supabase.from('sections').select('*').order('sort_order'),
         supabase.from('concepts').select('*').order('sort_order'),
@@ -64,6 +65,7 @@ Deno.serve(async (req) => {
 
     const profile = profileRes.data
     const session = sessionRes.data
+    const materialText = materialRes.data?.extracted_text ?? ''
     const chapters = chaptersRes.data ?? []
     const allSections = sectionsRes.data ?? []
     const allConcepts = (conceptsRes.data ?? []) as Concept[]
@@ -169,6 +171,7 @@ Deno.serve(async (req) => {
       current_section: currentSection,
       lesson_plan: JSON.stringify(lessonPlan),
       professor_questions: JSON.stringify(professorQuestions),
+      study_material: materialText.slice(0, 30000),
     }
 
     // Request signed URL from ElevenLabs
