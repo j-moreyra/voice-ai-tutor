@@ -170,6 +170,11 @@ export default function VoiceSession() {
         conversationRef.current = conversation
       } catch (err) {
         if (cancelled) return
+        // Clean up orphaned session row if one was created before the failure
+        if (sessionIdRef.current) {
+          endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+        }
+        stopMediaStream()
         const message =
           err instanceof DOMException && err.name === 'NotAllowedError'
             ? 'Microphone access is required for voice sessions. Please allow microphone access and try again.'
@@ -193,7 +198,14 @@ export default function VoiceSession() {
   }, [user, materialId, handleEnd, stopMediaStream])
 
   const handleMuteToggle = () => {
-    setMuted(!muted)
+    const next = !muted
+    setMuted(next)
+    // Actually mute/unmute the mic by toggling audio track enabled state
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !next
+      })
+    }
   }
 
   const handleEndClick = () => {
