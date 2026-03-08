@@ -66,26 +66,68 @@ async function extractPptxText(file: File): Promise<string> {
   const buffer = await file.arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
 
-  const slides: { index: number; text: string }[] = []
+  const slides: { index: number; text: string; notes: string }[] = []
 
   for (const [path, zipEntry] of Object.entries(zip.files)) {
-    const match = path.match(/^ppt\/slides\/slide(\d+)\.xml$/)
-    if (!match) continue
+    // Extract slide text
+    const slideMatch = path.match(/^ppt\/slides\/slide(\d+)\.xml$/)
+    if (slideMatch) {
+      const xml = await zipEntry.async('text')
+      const text = extractXmlText(xml)
+      const index = parseInt(slideMatch[1], 10)
 
-    const xml = await zipEntry.async('text')
-    // Extract text from <a:t> tags in the slide XML
-    const texts: string[] = []
-    const regex = /<a:t>([^<]*)<\/a:t>/g
-    let m
-    while ((m = regex.exec(xml)) !== null) {
-      if (m[1].trim()) texts.push(m[1])
+      // Find or create the slide entry
+      let slide = slides.find((s) => s.index === index)
+      if (!slide) {
+        slide = { index, text: '', notes: '' }
+        slides.push(slide)
+      }
+      slide.text = text
+      continue
     }
 
-    if (texts.length) {
-      slides.push({ index: parseInt(match[1], 10), text: texts.join(' ') })
+    // Extract speaker notes
+    const notesMatch = path.match(/^ppt\/notesSlides\/notesSlide(\d+)\.xml$/)
+    if (notesMatch) {
+      const xml = await zipEntry.async('text')
+      const text = extractXmlText(xml)
+      const index = parseInt(notesMatch[1], 10)
+
+      let slide = slides.find((s) => s.index === index)
+      if (!slide) {
+        slide = { index, text: '', notes: '' }
+        slides.push(slide)
+      }
+      slide.notes = text
     }
   }
 
   slides.sort((a, b) => a.index - b.index)
-  return slides.map((s) => s.text).join('\n\n')
+  return slides
+    .map((s) => {
+      let content = s.text
+      if (s.notes) {
+        content += '\n[Notes] ' + s.notes
+      }
+      return content
+    })
+    .filter((s) => s.trim())
+    .join('\n\n')
+}
+
+// Helper: extract text from PPTX XML and decode HTML entities
+function extractXmlText(xml: string): string {
+  const texts: string[] = []
+  const regex = /<a:t>([^<]*)<\/a:t>/g
+  let m
+  while ((m = regex.exec(xml)) !== null) {
+    const decoded = m[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+    if (decoded.trim()) texts.push(decoded)
+  }
+  return texts.join(' ')
 }
