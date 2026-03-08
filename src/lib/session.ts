@@ -1,11 +1,13 @@
 import { supabase } from './supabase'
-import type { Session, SessionType, EndReason, MasteryStatus } from '../types/database'
+import type { Session, SessionType, EndReason } from '../types/database'
+
+const DISCONNECT_THRESHOLD_MS = 15 * 60 * 1000 // 15 minutes
 
 export async function determineSessionType(
   userId: string,
   materialId: string
 ): Promise<SessionType> {
-  // Check for previous sessions
+  // Get most recent session
   const { data: sessions } = await supabase
     .from('sessions')
     .select('*')
@@ -17,53 +19,40 @@ export async function determineSessionType(
   if (!sessions?.length) return 'first_session'
 
   const last = sessions[0] as Session
+  const now = Date.now()
 
-  // If last session ended due to disconnect/timeout, this is a reconnect
-  if (last.end_reason === 'disconnected' || last.end_reason === 'timeout') {
-    return 'disconnected'
+  // Handle orphaned sessions (app crash / browser closed without ending)
+  if (!last.ended_at) {
+    const startedAt = new Date(last.started_at).getTime()
+    const elapsed = now - startedAt
+
+    // Close the orphaned session in the background
+    endSession(last.id, 'disconnected').catch((err) =>
+      console.error('Failed to close orphaned session:', err)
+    )
+
+    if (elapsed < DISCONNECT_THRESHOLD_MS) {
+      return 'disconnected'
+    }
   }
 
-  // Check if all concepts are mastered
-  const { data: chapters } = await supabase
-    .from('chapters')
-    .select('id')
-    .eq('material_id', materialId)
-
-  if (chapters?.length) {
-    const chapterIds = chapters.map((c) => c.id)
-
-    const { data: sections } = await supabase
-      .from('sections')
-      .select('id')
-      .in('chapter_id', chapterIds)
-
-    if (sections?.length) {
-      const sectionIds = sections.map((s) => s.id)
-
-      const { data: concepts } = await supabase
-        .from('concepts')
-        .select('id')
-        .in('section_id', sectionIds)
-
-      if (concepts?.length) {
-        const conceptIds = concepts.map((c) => c.id)
-
-        const { data: mastery } = await supabase
-          .from('mastery_state')
-          .select('status')
-          .eq('user_id', userId)
-          .in('concept_id', conceptIds)
-
-        const masteredCount = (mastery ?? []).filter(
-          (m) => (m as { status: MasteryStatus }).status === 'mastered'
-        ).length
-
-        if (masteredCount === concepts.length) {
-          return 'returning_completed'
-        }
+  // Handle explicit disconnects — only treat as "disconnected" if recent
+  if (last.end_reason === 'disconnected' || last.end_reason === 'timeout') {
+    if (last.ended_at) {
+      const endedAt = new Date(last.ended_at).getTime()
+      if (now - endedAt < DISCONNECT_THRESHOLD_MS) {
+        return 'disconnected'
       }
     }
   }
+
+  // Check if all concepts are mastered (single RPC call to Supabase)
+  const { data: isComplete } = await supabase.rpc('check_material_completion', {
+    p_user_id: userId,
+    p_material_id: materialId,
+  })
+
+  if (isComplete) return 'returning_completed'
 
   return 'returning'
 }
