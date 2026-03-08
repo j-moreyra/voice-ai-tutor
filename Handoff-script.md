@@ -1,4 +1,4 @@
-# CLAUDE.md — Voice AI Tutor
+# Handoff-script.md — Voice AI Tutor
 
 ## Project Context
 
