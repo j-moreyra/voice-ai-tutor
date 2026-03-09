@@ -7,7 +7,7 @@ export default function AuthCallback() {
 
   useEffect(() => {
     // Listen for auth state changes (handles hash fragment parsing)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         subscription.unsubscribe()
         navigate('/', { replace: true })
