@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, useParams } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import VoiceSessionErrorBoundary from './components/VoiceSessionErrorBoundary'
+import AuthCallback from './pages/AuthCallback'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
 import Onboarding from './pages/Onboarding'
@@ -23,6 +24,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
           <Route
