@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import VoiceSessionErrorBoundary from './components/VoiceSessionErrorBoundary'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
+import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
 import StudyPlan from './pages/StudyPlan'
 import VoiceSession from './pages/VoiceSession'
@@ -24,6 +25,14 @@ export default function App() {
         <Routes>
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
+          <Route
+            path="/onboarding"
+            element={
+              <ProtectedRoute>
+                <Onboarding />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/"
             element={
