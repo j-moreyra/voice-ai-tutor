@@ -6,13 +6,32 @@ export default function AuthCallback() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Listen for auth state changes (handles hash fragment parsing)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
+        subscription.unsubscribe()
         navigate('/', { replace: true })
-      } else {
-        navigate('/signin', { replace: true })
       }
     })
+
+    // Also check if session already exists
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        subscription.unsubscribe()
+        navigate('/', { replace: true })
+      }
+    })
+
+    // Fallback: if no auth event fires within 5s, redirect to signin
+    const timeout = setTimeout(() => {
+      subscription.unsubscribe()
+      navigate('/signin', { replace: true })
+    }, 5000)
+
+    return () => {
+      clearTimeout(timeout)
+      subscription.unsubscribe()
+    }
   }, [navigate])
 
   return (
