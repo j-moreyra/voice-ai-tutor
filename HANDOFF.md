@@ -41,7 +41,7 @@
 
 ## 4. Pending / Next Steps
 
-- [ ] **Deploy `get-signed-url` Edge Function** — requires Supabase login (`npx supabase login`) then: `npx supabase functions deploy get-signed-url --project-ref rfnxdtyzadsubosekefm`
+- [x] **Deploy `get-signed-url` Edge Function** — Supabase CLI authenticated and Edge Function deployed
 - [ ] Review and validate voice session flow end-to-end (VoiceSession.tsx)
 - [ ] Verify `update-session-state` Edge Function integration with ElevenLabs tool calls
 - [ ] Validate mastery state transitions match system prompt spec (see `Voice_AI_Tutor_System_Prompt_v1.0.md`)
@@ -58,5 +58,5 @@
 - **Mastery states:** `not_started | in_progress | struggling | mastered | skipped`
 - **Session types:** `first_session | returning | returning_completed | disconnected`
 - **Edge Functions:** `supabase/functions/get-signed-url` and `supabase/functions/process-material`
-- **Deploy blocked:** Supabase CLI requires authentication — run `npx supabase login` to authenticate before deploying Edge Functions
+- **Deploy status:** Supabase CLI authenticated; `get-signed-url` Edge Function deployed
 - **Pruning note:** The `.docx` spec files in root are reference-only; all actionable specs are captured in `database-schema.md` and the system prompt markdown

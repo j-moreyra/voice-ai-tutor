@@ -32,7 +32,7 @@
 - Created this comprehensive `docs/HANDOFF.md` using the Handoff-script.md template
 
 **Blockers:**
-- **Supabase CLI authentication** — Cannot deploy Edge Functions without running `npx supabase login` interactively. No SUPABASE_ACCESS_TOKEN env var is set.
+- ~~Supabase CLI authentication~~ — **Resolved.** CLI authenticated and `get-signed-url` deployed.
 
 ## 3. Architecture
 
@@ -178,15 +178,15 @@
 
 ## 6. Active Issues
 
-- **Supabase CLI deploy blocked** — Cannot deploy Edge Functions without interactive `npx supabase login`. No `SUPABASE_ACCESS_TOKEN` environment variable is set. Need to authenticate before deploying `get-signed-url` or any other Edge Function.
-- **`get-signed-url` Edge Function** — needs deployment after recent `days_since_last_session` fix. Deploy command: `npx supabase functions deploy get-signed-url --project-ref rfnxdtyzadsubosekefm`
+- ~~**Supabase CLI deploy blocked**~~ — **Resolved.** Supabase CLI authenticated.
+- ~~**`get-signed-url` Edge Function**~~ — **Resolved.** Deployed successfully.
 - **`process-material` uses `esm.sh` imports** — works currently but may be fragile. Consider migrating to `jsr:` imports if 503 boot failures occur.
 
 ## 7. Next Steps
 
 **High Priority (deploy blockers):**
-- [ ] Authenticate Supabase CLI: `npx supabase login`
-- [ ] Deploy `get-signed-url` Edge Function: `npx supabase functions deploy get-signed-url --project-ref rfnxdtyzadsubosekefm`
+- [x] Authenticate Supabase CLI: `npx supabase login`
+- [x] Deploy `get-signed-url` Edge Function: `npx supabase functions deploy get-signed-url --project-ref rfnxdtyzadsubosekefm`
 
 **Validation:**
 - [ ] Review and validate voice session flow end-to-end (VoiceSession.tsx)
