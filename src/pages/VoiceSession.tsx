@@ -206,15 +206,18 @@ export default function VoiceSession() {
     }
   }, [user, materialId, speedParam, handleEnd, stopMediaStream])
 
+  const setMicEnabled = (enabled: boolean) => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = enabled
+      })
+    }
+  }
+
   const handlePauseToggle = () => {
     const nextPaused = !paused
     setPaused(nextPaused)
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !nextPaused
-      })
-    }
+    setMicEnabled(!nextPaused)
 
     if (nextPaused) {
       setMuted(true)
@@ -233,11 +236,7 @@ export default function VoiceSession() {
     if (paused) return
     const next = !muted
     setMuted(next)
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !next
-      })
-    }
+    setMicEnabled(!next)
   }
 
   const handleEndClick = () => {
