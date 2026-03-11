@@ -137,19 +137,21 @@ Deno.serve(async (req) => {
 
     const mastery_summary = `${masteredCount}/${totalConcepts} mastered, ${strugglingConcepts.length} struggling, ${inProgressConcepts.length} in progress, ${skippedConcepts.length} skipped, ${totalConcepts - masteredCount - strugglingConcepts.length - inProgressConcepts.length - skippedConcepts.length} not started`
 
-    // Compute days since last session
+    // Compute days since last completed session (exclude orphaned sessions
+    // that were never properly ended, to avoid stale/incorrect values)
     const { data: lastSessionData } = await supabase
       .from('sessions')
       .select('started_at, ended_at')
       .eq('user_id', user.id)
       .eq('material_id', material_id)
       .neq('id', session_id)
-      .order('started_at', { ascending: false })
+      .not('ended_at', 'is', null)
+      .order('ended_at', { ascending: false })
       .limit(1)
 
     let daysSinceLastSession = 'first session'
     if (lastSessionData?.length) {
-      const lastDate = new Date(lastSessionData[0].ended_at ?? lastSessionData[0].started_at)
+      const lastDate = new Date(lastSessionData[0].ended_at)
       const now = new Date()
       const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24))
       daysSinceLastSession = diffDays === 0 ? 'today' : `${diffDays}`
