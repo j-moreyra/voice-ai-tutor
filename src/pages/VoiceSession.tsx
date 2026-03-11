@@ -229,6 +229,7 @@ export default function VoiceSession() {
       setPausePending(false)
       setMuted(false)
       setMicEnabled(true)
+      conversationRef.current?.setVolume({ volume: 1 })
       conversationRef.current?.sendContextualUpdate(
         'Student cancelled pause, continue normally.'
       )
@@ -240,28 +241,27 @@ export default function VoiceSession() {
       setPaused(false)
       setMuted(false)
       setMicEnabled(true)
+      conversationRef.current?.setVolume({ volume: 1 })
       conversationRef.current?.sendContextualUpdate(
         'The student has unpaused. Continue from where you left off.'
       )
       return
     }
 
-    // Pause while agent is speaking — enter pending state
-    if (mode === 'speaking') {
-      pausePendingRef.current = true
-      setPausePending(true)
-      setMuted(true)
-      setMicEnabled(false)
-      conversationRef.current?.sendContextualUpdate(
-        'The student has paused the session. Stop speaking and wait for them to unpause.'
-      )
-      return
-    }
-
-    // Pause while agent is not speaking — immediate pause
-    setPaused(true)
+    // Pause — mute audio output immediately, then notify agent
+    conversationRef.current?.setVolume({ volume: 0 })
     setMuted(true)
     setMicEnabled(false)
+
+    if (mode === 'speaking') {
+      // Agent is mid-speech — enter pending state until it finishes current utterance
+      pausePendingRef.current = true
+      setPausePending(true)
+    } else {
+      // Agent is not speaking — immediate pause
+      setPaused(true)
+    }
+
     conversationRef.current?.sendContextualUpdate(
       'The student has paused the session. Stop speaking and wait for them to unpause.'
     )
