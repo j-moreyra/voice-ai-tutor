@@ -14,6 +14,9 @@ export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
   const chapterId = searchParams.get('chapterId') ?? undefined
+  // Voice speed override (requires TTS overrides enabled in ElevenLabs dashboard:
+  // Agent → Settings → Security tab → enable overrides for TTS/Voice settings)
+  const speedParam = parseFloat(searchParams.get('speed') ?? '1.0') || 1.0
   const { user } = useAuth()
   const [status, setStatus] = useState<Status>('initializing')
   const [mode, setMode] = useState<Mode>('connecting')
@@ -116,6 +119,11 @@ export default function VoiceSession() {
         const conversation = await Conversation.startSession({
           signedUrl,
           dynamicVariables,
+          overrides: {
+            tts: {
+              speed: speedParam,
+            },
+          },
           clientTools: {
             update_session_state: toolHandler,
           },
@@ -195,7 +203,7 @@ export default function VoiceSession() {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, handleEnd, stopMediaStream])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
 
   const handleMuteToggle = () => {
     const next = !muted
