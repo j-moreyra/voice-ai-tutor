@@ -23,12 +23,14 @@ export default function VoiceSession() {
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
   const [paused, setPaused] = useState(false)
+  const [pausePending, setPausePending] = useState(false)
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
+  const pausePendingRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
   const statusRef = useRef<Status>('initializing')
 
@@ -159,7 +161,13 @@ export default function VoiceSession() {
           },
           onModeChange: (newMode: { mode: string }) => {
             if (!cancelled) {
-              setMode(newMode.mode === 'speaking' ? 'speaking' : 'listening')
+              const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
+              setMode(resolved)
+              if (pausePendingRef.current && resolved === 'listening') {
+                pausePendingRef.current = false
+                setPausePending(false)
+                setPaused(true)
+              }
             }
           },
           onError: (err: unknown) => {
@@ -215,25 +223,52 @@ export default function VoiceSession() {
   }
 
   const handlePauseToggle = () => {
-    const nextPaused = !paused
-    setPaused(nextPaused)
-    setMicEnabled(!nextPaused)
-
-    if (nextPaused) {
-      setMuted(true)
-      conversationRef.current?.sendContextualUpdate(
-        'The student has paused the session. Stop speaking and wait for them to unpause.'
-      )
-    } else {
+    // Cancel a pending pause
+    if (pausePendingRef.current) {
+      pausePendingRef.current = false
+      setPausePending(false)
       setMuted(false)
+      setMicEnabled(true)
+      conversationRef.current?.sendContextualUpdate(
+        'Student cancelled pause, continue normally.'
+      )
+      return
+    }
+
+    // Unpause
+    if (paused) {
+      setPaused(false)
+      setMuted(false)
+      setMicEnabled(true)
       conversationRef.current?.sendContextualUpdate(
         'The student has unpaused. Continue from where you left off.'
       )
+      return
     }
+
+    // Pause while agent is speaking — enter pending state
+    if (mode === 'speaking') {
+      pausePendingRef.current = true
+      setPausePending(true)
+      setMuted(true)
+      setMicEnabled(false)
+      conversationRef.current?.sendContextualUpdate(
+        'The student has paused the session. Stop speaking and wait for them to unpause.'
+      )
+      return
+    }
+
+    // Pause while agent is not speaking — immediate pause
+    setPaused(true)
+    setMuted(true)
+    setMicEnabled(false)
+    conversationRef.current?.sendContextualUpdate(
+      'The student has paused the session. Stop speaking and wait for them to unpause.'
+    )
   }
 
   const handleMuteToggle = () => {
-    if (paused) return
+    if (paused || pausePendingRef.current) return
     const next = !muted
     setMuted(next)
     setMicEnabled(!next)
@@ -304,6 +339,9 @@ export default function VoiceSession() {
         ) : (
           <div className="text-center">
             <SessionStatus mode={mode} />
+            {pausePending && (
+              <p className="mt-4 text-sm text-warning animate-pulse">Pausing...</p>
+            )}
             {paused && (
               <p className="mt-4 text-sm text-warning animate-pulse">Paused</p>
             )}
@@ -323,12 +361,12 @@ export default function VoiceSession() {
 
           <button
             onClick={handlePauseToggle}
-            className={`btn-press flex h-14 w-14 items-center justify-center rounded-full transition-all duration-200 ${
-              paused
-                ? 'bg-warning/20 text-warning'
-                : 'bg-surface-hover text-text-secondary'
-            }`}
-            title={paused ? 'Resume' : 'Pause'}
+            className={`btn-press flex flex-col items-center justify-center rounded-full transition-all duration-200 ${
+              paused || pausePending
+                ? 'h-14 w-14 bg-warning/20 text-warning'
+                : 'h-14 w-14 bg-surface-hover text-text-secondary'
+            } ${pausePending ? 'animate-pulse' : ''}`}
+            title={paused ? 'Resume' : pausePending ? 'Cancel pause' : 'Pause'}
           >
             {paused ? (
               /* Play icon */
@@ -345,15 +383,15 @@ export default function VoiceSession() {
 
           <button
             onClick={handleMuteToggle}
-            disabled={paused}
+            disabled={paused || pausePending}
             className={`btn-press rounded-full p-4 transition-all duration-200 ${
-              paused
+              paused || pausePending
                 ? 'cursor-not-allowed opacity-40 bg-surface text-text-muted'
                 : muted
                   ? 'bg-danger-soft text-danger'
                   : 'bg-surface text-text-secondary hover:bg-surface-hover'
             }`}
-            title={paused ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
+            title={paused || pausePending ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
           >
             {muted ? (
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
