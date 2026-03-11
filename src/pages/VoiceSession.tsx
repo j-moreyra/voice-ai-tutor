@@ -243,28 +243,27 @@ export default function VoiceSession() {
       setMicEnabled(true)
       conversationRef.current?.setVolume({ volume: 1 })
       conversationRef.current?.sendContextualUpdate(
-        'The student has unpaused. Continue from where you left off.'
+        'The student has unpaused. Briefly recap what you were saying before the pause, then continue from that point.'
       )
       return
     }
 
-    // Pause — mute audio output immediately, then notify agent
+    // Pause — instruct agent to stop, then mute audio so any remaining
+    // speech is silenced.  The contextual update is sent first so the agent
+    // can process it before we cut audio.
+    conversationRef.current?.sendContextualUpdate(
+      'The student has paused the session. STOP speaking immediately. Do NOT continue teaching or advance through any material. When the student unpauses, repeat the last thing you were saying so they don\'t miss anything.'
+    )
     conversationRef.current?.setVolume({ volume: 0 })
     setMuted(true)
     setMicEnabled(false)
 
     if (mode === 'speaking') {
-      // Agent is mid-speech — enter pending state until it finishes current utterance
       pausePendingRef.current = true
       setPausePending(true)
     } else {
-      // Agent is not speaking — immediate pause
       setPaused(true)
     }
-
-    conversationRef.current?.sendContextualUpdate(
-      'The student has paused the session. Stop speaking and wait for them to unpause.'
-    )
   }
 
   const handleMuteToggle = () => {
