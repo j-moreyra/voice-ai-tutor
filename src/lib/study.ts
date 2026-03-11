@@ -82,17 +82,18 @@ export async function fetchStudyPlan(userId: string, materialId: string): Promis
       })),
   }))
 
-  const allStudyConcepts = studyChapters.flatMap((ch) =>
-    ch.sections.flatMap((s) => s.concepts)
-  )
-
-  const stats: StudyStats = {
-    total: allStudyConcepts.length,
-    mastered: allStudyConcepts.filter((c) => c.mastery === 'mastered').length,
-    inProgress: allStudyConcepts.filter((c) => c.mastery === 'in_progress').length,
-    struggling: allStudyConcepts.filter((c) => c.mastery === 'struggling').length,
-    notStarted: allStudyConcepts.filter((c) => c.mastery === 'not_started').length,
-    skipped: allStudyConcepts.filter((c) => c.mastery === 'skipped').length,
+  const stats: StudyStats = { total: 0, mastered: 0, inProgress: 0, struggling: 0, notStarted: 0, skipped: 0 }
+  for (const ch of studyChapters) {
+    for (const s of ch.sections) {
+      for (const c of s.concepts) {
+        stats.total++
+        if (c.mastery === 'mastered') stats.mastered++
+        else if (c.mastery === 'in_progress') stats.inProgress++
+        else if (c.mastery === 'struggling') stats.struggling++
+        else if (c.mastery === 'not_started') stats.notStarted++
+        else if (c.mastery === 'skipped') stats.skipped++
+      }
+    }
   }
 
   return { material, chapters: studyChapters, stats }

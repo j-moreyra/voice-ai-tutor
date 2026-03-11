@@ -1,5 +1,12 @@
 export type EducationLevel = 'middle_school' | 'high_school' | 'undergraduate' | 'graduate'
 
+export const EDUCATION_LEVELS: { value: EducationLevel; label: string }[] = [
+  { value: 'middle_school', label: 'Middle School' },
+  { value: 'high_school', label: 'High School' },
+  { value: 'undergraduate', label: 'Undergraduate' },
+  { value: 'graduate', label: 'Graduate' },
+]
+
 export type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
 export type FileType = 'pdf' | 'docx' | 'pptx'
@@ -9,10 +16,6 @@ export type MasteryStatus = 'not_started' | 'in_progress' | 'struggling' | 'mast
 export type SessionType = 'first_session' | 'returning' | 'returning_completed' | 'disconnected'
 
 export type EndReason = 'completed' | 'student_break' | 'student_departure' | 'disconnected' | 'timeout'
-
-export type QuestionType = 'recall' | 'application' | 'synthesis' | 'multiple_choice' | 'true_false' | 'essay'
-
-export type SuggestedPlacement = 'section_quiz' | 'chapter_assessment'
 
 export type ChapterResult = 'mastered' | 'not_mastered'
 
@@ -65,17 +68,6 @@ export interface Concept {
   created_at: string
 }
 
-export interface ProfessorQuestion {
-  id: string
-  chapter_id: string
-  section_id: string | null
-  user_id: string
-  question_text: string
-  question_type: QuestionType | null
-  suggested_placement: SuggestedPlacement | null
-  created_at: string
-}
-
 export interface MasteryState {
   id: string
   concept_id: string
@@ -105,79 +97,3 @@ export interface Session {
   end_reason: EndReason | null
 }
 
-export interface SessionSectionCompleted {
-  id: string
-  session_id: string
-  section_id: string
-  user_id: string
-  completed_at: string
-}
-
-export interface Database {
-  public: {
-    Tables: {
-      profiles: {
-        Row: Profile
-        Insert: Omit<Profile, 'created_at' | 'updated_at'>
-        Update: Partial<Omit<Profile, 'id' | 'created_at' | 'updated_at'>>
-        Relationships: []
-      }
-      materials: {
-        Row: Material
-        Insert: Omit<Material, 'id' | 'created_at' | 'updated_at' | 'processing_status'> & { processing_status?: ProcessingStatus }
-        Update: Partial<Omit<Material, 'id' | 'created_at' | 'updated_at'>>
-        Relationships: []
-      }
-      chapters: {
-        Row: Chapter
-        Insert: Omit<Chapter, 'id' | 'created_at'>
-        Update: Partial<Omit<Chapter, 'id' | 'created_at'>>
-        Relationships: []
-      }
-      sections: {
-        Row: Section
-        Insert: Omit<Section, 'id' | 'created_at'>
-        Update: Partial<Omit<Section, 'id' | 'created_at'>>
-        Relationships: []
-      }
-      concepts: {
-        Row: Concept
-        Insert: Omit<Concept, 'id' | 'created_at'>
-        Update: Partial<Omit<Concept, 'id' | 'created_at'>>
-        Relationships: []
-      }
-      professor_questions: {
-        Row: ProfessorQuestion
-        Insert: Omit<ProfessorQuestion, 'id' | 'created_at'>
-        Update: Partial<Omit<ProfessorQuestion, 'id' | 'created_at'>>
-        Relationships: []
-      }
-      mastery_state: {
-        Row: MasteryState
-        Insert: Omit<MasteryState, 'id' | 'updated_at'> & { status?: MasteryStatus }
-        Update: Partial<Omit<MasteryState, 'id' | 'updated_at'>>
-        Relationships: []
-      }
-      chapter_results: {
-        Row: ChapterResultRecord
-        Insert: Omit<ChapterResultRecord, 'id' | 'assessed_at'>
-        Update: Partial<Omit<ChapterResultRecord, 'id' | 'assessed_at'>>
-        Relationships: []
-      }
-      sessions: {
-        Row: Session
-        Insert: Omit<Session, 'id' | 'started_at'>
-        Update: Partial<Omit<Session, 'id' | 'started_at'>>
-        Relationships: []
-      }
-      session_sections_completed: {
-        Row: SessionSectionCompleted
-        Insert: Omit<SessionSectionCompleted, 'id' | 'completed_at'>
-        Update: Partial<Omit<SessionSectionCompleted, 'id' | 'completed_at'>>
-        Relationships: []
-      }
-    }
-    Views: Record<string, never>
-    Functions: Record<string, never>
-  }
-}
