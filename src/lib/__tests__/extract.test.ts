@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { extractXmlText } from '../extract'
+
+// ── extractXmlText ────────────────────────────────────────────────────
 
 describe('extractXmlText', () => {
   it('extracts text from simple <a:t> tags', () => {
@@ -61,5 +63,37 @@ describe('extractXmlText', () => {
       </p:txBody>
     `
     expect(extractXmlText(xml)).toBe('Bacterial Cell Structure Gram Staining & Classification')
+  })
+
+  it('handles empty XML', () => {
+    expect(extractXmlText('')).toBe('')
+  })
+
+  it('handles all five entity types simultaneously', () => {
+    const xml = '<a:t>&amp; &lt; &gt; &quot; &apos;</a:t>'
+    expect(extractXmlText(xml)).toBe('& < > " \'')
+  })
+
+  it('handles tabs and newlines as whitespace', () => {
+    const xml = '<a:t>Hello\t\t\nWorld</a:t>'
+    expect(extractXmlText(xml)).toBe('Hello World')
+  })
+})
+
+// ── extractText (dispatch) ────────────────────────────────────────────
+
+// We can't easily test PDF/DOCX/PPTX extraction without actual file
+// parsing libraries, but we can test the dispatch and error handling.
+// Since extractText imports pdfjs-dist/mammoth/jszip dynamically,
+// we test via the module interface.
+
+describe('extractText', () => {
+  // We need to dynamically import since the module also imports supabase
+  // indirectly — but extract.ts doesn't import supabase, so direct import works.
+
+  it('throws for unsupported file type', async () => {
+    const { extractText } = await import('../extract')
+    const file = new Blob(['test'], { type: 'text/plain' }) as File
+    await expect(extractText(file, 'txt' as never)).rejects.toThrow('Unsupported file type: txt')
   })
 })
