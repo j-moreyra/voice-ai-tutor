@@ -22,6 +22,7 @@ export default function VoiceSession() {
   const [mode, setMode] = useState<Mode>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
+  const [paused, setPaused] = useState(false)
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
@@ -205,10 +206,33 @@ export default function VoiceSession() {
     }
   }, [user, materialId, speedParam, handleEnd, stopMediaStream])
 
+  const handlePauseToggle = () => {
+    const nextPaused = !paused
+    setPaused(nextPaused)
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !nextPaused
+      })
+    }
+
+    if (nextPaused) {
+      setMuted(true)
+      conversationRef.current?.sendContextualUpdate(
+        'The student has paused the session. Stop speaking and wait for them to unpause.'
+      )
+    } else {
+      setMuted(false)
+      conversationRef.current?.sendContextualUpdate(
+        'The student has unpaused. Continue from where you left off.'
+      )
+    }
+  }
+
   const handleMuteToggle = () => {
+    if (paused) return
     const next = !muted
     setMuted(next)
-    // Actually mute/unmute the mic by toggling audio track enabled state
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = !next
@@ -279,13 +303,18 @@ export default function VoiceSession() {
             </Link>
           </div>
         ) : (
-          <SessionStatus mode={mode} />
+          <div className="text-center">
+            <SessionStatus mode={mode} />
+            {paused && (
+              <p className="mt-4 text-sm text-warning animate-pulse">Paused</p>
+            )}
+          </div>
         )}
       </main>
 
       {/* Bottom bar */}
       {status === 'connected' && (
-        <footer className="flex items-center justify-between px-5 py-5">
+        <footer className="flex items-center justify-center gap-6 px-5 py-5">
           <button
             onClick={handleEndClick}
             className="text-sm text-text-muted transition-colors hover:text-danger"
@@ -294,13 +323,38 @@ export default function VoiceSession() {
           </button>
 
           <button
-            onClick={handleMuteToggle}
-            className={`btn-press rounded-full p-4 transition-all duration-200 ${
-              muted
-                ? 'bg-danger-soft text-danger'
-                : 'bg-surface text-text-secondary hover:bg-surface-hover'
+            onClick={handlePauseToggle}
+            className={`btn-press flex h-14 w-14 items-center justify-center rounded-full transition-all duration-200 ${
+              paused
+                ? 'bg-warning/20 text-warning'
+                : 'bg-surface-hover text-text-secondary'
             }`}
-            title={muted ? 'Unmute' : 'Mute'}
+            title={paused ? 'Resume' : 'Pause'}
+          >
+            {paused ? (
+              /* Play icon */
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5.14v14l11-7-11-7Z" />
+              </svg>
+            ) : (
+              /* Pause icon */
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 4h4v16H6V4Zm8 0h4v16h-4V4Z" />
+              </svg>
+            )}
+          </button>
+
+          <button
+            onClick={handleMuteToggle}
+            disabled={paused}
+            className={`btn-press rounded-full p-4 transition-all duration-200 ${
+              paused
+                ? 'cursor-not-allowed opacity-40 bg-surface text-text-muted'
+                : muted
+                  ? 'bg-danger-soft text-danger'
+                  : 'bg-surface text-text-secondary hover:bg-surface-hover'
+            }`}
+            title={paused ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
           >
             {muted ? (
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -313,8 +367,6 @@ export default function VoiceSession() {
               </svg>
             )}
           </button>
-
-          <div className="w-16" /> {/* Spacer for centering mic button */}
         </footer>
       )}
     </div>
