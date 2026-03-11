@@ -14,17 +14,23 @@ export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
   const chapterId = searchParams.get('chapterId') ?? undefined
+  // Voice speed override (requires TTS overrides enabled in ElevenLabs dashboard:
+  // Agent → Settings → Security tab → enable overrides for TTS/Voice settings)
+  const speedParam = parseFloat(searchParams.get('speed') ?? '1.0') || 1.0
   const { user } = useAuth()
   const [status, setStatus] = useState<Status>('initializing')
   const [mode, setMode] = useState<Mode>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const [pausePending, setPausePending] = useState(false)
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
+  const pausePendingRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
   const statusRef = useRef<Status>('initializing')
 
@@ -116,6 +122,11 @@ export default function VoiceSession() {
         const conversation = await Conversation.startSession({
           signedUrl,
           dynamicVariables,
+          overrides: {
+            tts: {
+              speed: speedParam,
+            },
+          },
           clientTools: {
             update_session_state: toolHandler,
           },
@@ -150,7 +161,13 @@ export default function VoiceSession() {
           },
           onModeChange: (newMode: { mode: string }) => {
             if (!cancelled) {
-              setMode(newMode.mode === 'speaking' ? 'speaking' : 'listening')
+              const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
+              setMode(resolved)
+              if (pausePendingRef.current && resolved === 'listening') {
+                pausePendingRef.current = false
+                setPausePending(false)
+                setPaused(true)
+              }
             }
           },
           onError: (err: unknown) => {
@@ -195,17 +212,66 @@ export default function VoiceSession() {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, handleEnd, stopMediaStream])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
 
-  const handleMuteToggle = () => {
-    const next = !muted
-    setMuted(next)
-    // Actually mute/unmute the mic by toggling audio track enabled state
+  const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !next
+        track.enabled = enabled
       })
     }
+  }
+
+  const handlePauseToggle = () => {
+    // Cancel a pending pause
+    if (pausePendingRef.current) {
+      pausePendingRef.current = false
+      setPausePending(false)
+      setMuted(false)
+      setMicEnabled(true)
+      conversationRef.current?.sendContextualUpdate(
+        'Student cancelled pause, continue normally.'
+      )
+      return
+    }
+
+    // Unpause
+    if (paused) {
+      setPaused(false)
+      setMuted(false)
+      setMicEnabled(true)
+      conversationRef.current?.sendContextualUpdate(
+        'The student has unpaused. Continue from where you left off.'
+      )
+      return
+    }
+
+    // Pause while agent is speaking — enter pending state
+    if (mode === 'speaking') {
+      pausePendingRef.current = true
+      setPausePending(true)
+      setMuted(true)
+      setMicEnabled(false)
+      conversationRef.current?.sendContextualUpdate(
+        'The student has paused the session. Stop speaking and wait for them to unpause.'
+      )
+      return
+    }
+
+    // Pause while agent is not speaking — immediate pause
+    setPaused(true)
+    setMuted(true)
+    setMicEnabled(false)
+    conversationRef.current?.sendContextualUpdate(
+      'The student has paused the session. Stop speaking and wait for them to unpause.'
+    )
+  }
+
+  const handleMuteToggle = () => {
+    if (paused || pausePendingRef.current) return
+    const next = !muted
+    setMuted(next)
+    setMicEnabled(!next)
   }
 
   const handleEndClick = () => {
@@ -271,13 +337,21 @@ export default function VoiceSession() {
             </Link>
           </div>
         ) : (
-          <SessionStatus mode={mode} />
+          <div className="text-center">
+            <SessionStatus mode={mode} />
+            {pausePending && (
+              <p className="mt-4 text-sm text-warning animate-pulse">Pausing...</p>
+            )}
+            {paused && (
+              <p className="mt-4 text-sm text-warning animate-pulse">Paused</p>
+            )}
+          </div>
         )}
       </main>
 
       {/* Bottom bar */}
       {status === 'connected' && (
-        <footer className="flex items-center justify-between px-5 py-5">
+        <footer className="flex items-center justify-center gap-6 px-5 py-5">
           <button
             onClick={handleEndClick}
             className="text-sm text-text-muted transition-colors hover:text-danger"
@@ -286,13 +360,38 @@ export default function VoiceSession() {
           </button>
 
           <button
+            onClick={handlePauseToggle}
+            className={`btn-press flex flex-col items-center justify-center rounded-full transition-all duration-200 ${
+              paused || pausePending
+                ? 'h-14 w-14 bg-warning/20 text-warning'
+                : 'h-14 w-14 bg-surface-hover text-text-secondary'
+            } ${pausePending ? 'animate-pulse' : ''}`}
+            title={paused ? 'Resume' : pausePending ? 'Cancel pause' : 'Pause'}
+          >
+            {paused ? (
+              /* Play icon */
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5.14v14l11-7-11-7Z" />
+              </svg>
+            ) : (
+              /* Pause icon */
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 4h4v16H6V4Zm8 0h4v16h-4V4Z" />
+              </svg>
+            )}
+          </button>
+
+          <button
             onClick={handleMuteToggle}
+            disabled={paused || pausePending}
             className={`btn-press rounded-full p-4 transition-all duration-200 ${
-              muted
-                ? 'bg-danger-soft text-danger'
-                : 'bg-surface text-text-secondary hover:bg-surface-hover'
+              paused || pausePending
+                ? 'cursor-not-allowed opacity-40 bg-surface text-text-muted'
+                : muted
+                  ? 'bg-danger-soft text-danger'
+                  : 'bg-surface text-text-secondary hover:bg-surface-hover'
             }`}
-            title={muted ? 'Unmute' : 'Mute'}
+            title={paused || pausePending ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
           >
             {muted ? (
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -305,8 +404,6 @@ export default function VoiceSession() {
               </svg>
             )}
           </button>
-
-          <div className="w-16" /> {/* Spacer for centering mic button */}
         </footer>
       )}
     </div>
