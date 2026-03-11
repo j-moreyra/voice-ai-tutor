@@ -81,74 +81,66 @@ async function extractPptxText(file: File): Promise<string> {
   const buffer = await file.arrayBuffer()
   const zip = await JSZip.loadAsync(buffer)
 
-  const slides: { index: number; text: string; notes: string }[] = []
+  const slideMap = new Map<number, { index: number; text: string; notes: string }>()
+
+  function getOrCreateSlide(index: number) {
+    let slide = slideMap.get(index)
+    if (!slide) {
+      slide = { index, text: '', notes: '' }
+      slideMap.set(index, slide)
+    }
+    return slide
+  }
+
+  let lastSlideIndex = 0
 
   for (const [path, zipEntry] of Object.entries(zip.files)) {
-    // Extract slide text
     const slideMatch = path.match(/^ppt\/slides\/slide(\d+)\.xml$/)
     if (slideMatch) {
       const xml = await zipEntry.async('text')
-      const text = extractXmlText(xml)
       const index = parseInt(slideMatch[1], 10)
-
-      // Find or create the slide entry
-      let slide = slides.find((s) => s.index === index)
-      if (!slide) {
-        slide = { index, text: '', notes: '' }
-        slides.push(slide)
-      }
-      slide.text = text
+      getOrCreateSlide(index).text = extractXmlText(xml)
+      if (index > lastSlideIndex) lastSlideIndex = index
       continue
     }
 
-    // Extract speaker notes
     const notesMatch = path.match(/^ppt\/notesSlides\/notesSlide(\d+)\.xml$/)
     if (notesMatch) {
       const xml = await zipEntry.async('text')
-      const text = extractXmlText(xml)
       const index = parseInt(notesMatch[1], 10)
-
-      let slide = slides.find((s) => s.index === index)
-      if (!slide) {
-        slide = { index, text: '', notes: '' }
-        slides.push(slide)
-      }
-      slide.notes = text
+      getOrCreateSlide(index).notes = extractXmlText(xml)
+      continue
     }
 
-    // Extract chart text
     const chartMatch = path.match(/^ppt\/charts\/chart\d+\.xml$/)
     if (chartMatch) {
       const xml = await zipEntry.async('text')
-      // Chart values and labels use <c:v> tags
       const chartTexts: string[] = []
       const chartRegex = /<c:v>([\s\S]*?)<\/c:v>/g
       let cm
       while ((cm = chartRegex.exec(xml)) !== null) {
         const val = cm[1].trim()
-        // Skip pure numbers — we want labels, not data points
         if (val && isNaN(Number(val))) chartTexts.push(val)
       }
       // Charts aren't tied to a specific slide easily, append to last slide
-      if (chartTexts.length && slides.length) {
-        slides[slides.length - 1].text += ' ' + chartTexts.join(' ')
+      if (chartTexts.length && lastSlideIndex > 0) {
+        getOrCreateSlide(lastSlideIndex).text += ' ' + chartTexts.join(' ')
       }
       continue
     }
 
-    // Extract diagram/SmartArt text
     const diagramMatch = path.match(/^ppt\/diagrams\/data\d+\.xml$/)
     if (diagramMatch) {
       const xml = await zipEntry.async('text')
       const diagText = extractXmlText(xml)
-      if (diagText && slides.length) {
-        slides[slides.length - 1].text += ' ' + diagText
+      if (diagText && lastSlideIndex > 0) {
+        getOrCreateSlide(lastSlideIndex).text += ' ' + diagText
       }
       continue
     }
   }
 
-  slides.sort((a, b) => a.index - b.index)
+  const slides = Array.from(slideMap.values()).sort((a, b) => a.index - b.index)
   return slides
     .map((s) => {
       let content = s.text
@@ -161,8 +153,7 @@ async function extractPptxText(file: File): Promise<string> {
     .join('\n\n')
 }
 
-// Helper: extract text from PPTX XML and decode HTML entities
-function extractXmlText(xml: string): string {
+export function extractXmlText(xml: string): string {
   const texts: string[] = []
   // Match <a:t> tags — covers normal text, grouped shapes, and fallback content
   const regex = /<a:t>([\s\S]*?)<\/a:t>/g
@@ -179,5 +170,3 @@ function extractXmlText(xml: string): string {
   }
   return texts.join(' ')
 }
-
-export { extractXmlText }

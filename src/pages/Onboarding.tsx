@@ -3,14 +3,8 @@ import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
+import { EDUCATION_LEVELS } from '../types/database'
 import type { EducationLevel } from '../types/database'
-
-const EDUCATION_LEVELS: { value: EducationLevel; label: string }[] = [
-  { value: 'middle_school', label: 'Middle School' },
-  { value: 'high_school', label: 'High School' },
-  { value: 'undergraduate', label: 'Undergraduate' },
-  { value: 'graduate', label: 'Graduate' },
-]
 
 export default function Onboarding() {
   const navigate = useNavigate()

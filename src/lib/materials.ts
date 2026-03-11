@@ -92,6 +92,8 @@ export async function uploadMaterial(
     headers: {
       Authorization: `Bearer ${session?.access_token}`,
     },
+  }).catch((err) => {
+    console.error('Background processing failed (non-fatal):', err)
   })
 
   return { error: null }
