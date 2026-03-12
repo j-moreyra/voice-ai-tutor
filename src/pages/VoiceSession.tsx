@@ -31,9 +31,8 @@ export default function VoiceSession() {
   const endedRef = useRef(false)
   const pausedRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
-  // Tracks whether user has ever had a successful connection this mount
-  // (survives pause/resume cycles, unlike connectedAtRef which resets)
-  const hasConnectedRef = useRef(false)
+  // How many times we've connected (0 = never, 1 = first, 2+ = after pause/resume)
+  const connectCountRef = useRef(0)
   const statusRef = useRef<Status>('initializing')
 
   useEffect(() => {
@@ -105,8 +104,8 @@ export default function VoiceSession() {
         onConnect: () => {
           if (!cancelled.current) {
             connectedAtRef.current = Date.now()
+            connectCountRef.current += 1
             pausedRef.current = false
-            hasConnectedRef.current = true
             setStatus('connected')
             setMode('listening')
             setPaused(false)
@@ -120,28 +119,22 @@ export default function VoiceSession() {
                 ? (Date.now() - connectedAtRef.current) / 1000
                 : 0
 
-              // Only suspect credits/config if we've never had a successful
-              // session before AND disconnected within 30s of connecting.
-              // After a pause/resume, a quick disconnect is a connection
-              // issue, not a credits problem.
-              if (connectedDuration < 30 && !hasConnectedRef.current) {
+              endedRef.current = true
+              stopMediaStream()
+              if (sessionIdRef.current) {
+                endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+              }
+
+              // First connection dropping within 30s = likely credits/config.
+              // Reconnections (after pause/resume) dropping = connection issue.
+              if (connectedDuration < 30 && connectCountRef.current <= 1) {
                 setError(
                   'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
                 )
-                setStatus('error')
-                endedRef.current = true
-                stopMediaStream()
-                if (sessionIdRef.current) {
-                  endSession(sessionIdRef.current, 'disconnected').catch(() => {})
-                }
               } else {
                 setError('The voice connection was lost. You can try again to reconnect.')
-                setStatus('error')
-                stopMediaStream()
-                if (sessionIdRef.current) {
-                  endSession(sessionIdRef.current, 'disconnected').catch(() => {})
-                }
               }
+              setStatus('error')
             }
           }
         },
