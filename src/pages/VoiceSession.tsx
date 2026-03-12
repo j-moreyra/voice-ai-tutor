@@ -31,6 +31,9 @@ export default function VoiceSession() {
   const endedRef = useRef(false)
   const pausedRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
+  // Tracks whether user has ever had a successful connection this mount
+  // (survives pause/resume cycles, unlike connectedAtRef which resets)
+  const hasConnectedRef = useRef(false)
   const statusRef = useRef<Status>('initializing')
 
   useEffect(() => {
@@ -103,6 +106,7 @@ export default function VoiceSession() {
           if (!cancelled.current) {
             connectedAtRef.current = Date.now()
             pausedRef.current = false
+            hasConnectedRef.current = true
             setStatus('connected')
             setMode('listening')
             setPaused(false)
@@ -116,7 +120,11 @@ export default function VoiceSession() {
                 ? (Date.now() - connectedAtRef.current) / 1000
                 : 0
 
-              if (connectedDuration < 30) {
+              // Only suspect credits/config if we've never had a successful
+              // session before AND disconnected within 30s of connecting.
+              // After a pause/resume, a quick disconnect is a connection
+              // issue, not a credits problem.
+              if (connectedDuration < 30 && !hasConnectedRef.current) {
                 setError(
                   'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
                 )
@@ -127,7 +135,12 @@ export default function VoiceSession() {
                   endSession(sessionIdRef.current, 'disconnected').catch(() => {})
                 }
               } else {
-                handleEnd('disconnected')
+                setError('The voice connection was lost. You can try again to reconnect.')
+                setStatus('error')
+                stopMediaStream()
+                if (sessionIdRef.current) {
+                  endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+                }
               }
             }
           }
