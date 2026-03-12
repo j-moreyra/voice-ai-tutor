@@ -14,6 +14,7 @@ export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
   const chapterId = searchParams.get('chapterId') ?? undefined
+  const sectionId = searchParams.get('sectionId') ?? undefined
   // Voice speed override (requires TTS overrides enabled in ElevenLabs dashboard:
   // Agent → Settings → Security tab → enable overrides for TTS/Voice settings)
   const speedParam = parseFloat(searchParams.get('speed') ?? '1.0') || 1.0
@@ -85,18 +86,25 @@ export default function VoiceSession() {
   // Stored in a ref so it can be called from both the initial useEffect and
   // from handlePauseToggle without being a useEffect dependency (which would
   // cause the effect to re-fire and disconnect the conversation).
-  const connectConversationRef = useRef<(cancelled: { current: boolean }) => Promise<void>>()
-  connectConversationRef.current = async (cancelled: { current: boolean }) => {
+  const connectConversationRef = useRef<(cancelled: { current: boolean }, resume?: boolean) => Promise<void>>()
+  connectConversationRef.current = async (cancelled: { current: boolean }, resume = false) => {
     if (!user || !materialId || !sessionIdRef.current) return
 
     const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
     if (cancelled.current) return
 
+    // When resuming from pause, override session_type so the agent treats
+    // this as a continuation — picking up from the last recorded position
+    // instead of restarting from the beginning of the section.
+    const vars = resume
+      ? { ...dynamicVariables, session_type: 'disconnected' }
+      : dynamicVariables
+
     const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
 
     const conversation = await Conversation.startSession({
       signedUrl,
-      dynamicVariables,
+      dynamicVariables: vars,
       overrides: {
         tts: { speed: speedParam },
       },
@@ -185,7 +193,7 @@ export default function VoiceSession() {
         const sessionType = await determineSessionType(user!.id, materialId!)
         if (cancelled.current) return
 
-        const session = await createSession(user!.id, materialId!, sessionType, chapterId)
+        const session = await createSession(user!.id, materialId!, sessionType, chapterId, sectionId)
         sessionIdRef.current = session.id
         if (cancelled.current) return
 
@@ -235,7 +243,7 @@ export default function VoiceSession() {
       setStatus('resuming')
       setMode('connecting')
       try {
-        await connectConversationRef.current!({ current: false })
+        await connectConversationRef.current!({ current: false }, true)
       } catch (err) {
         console.error('Failed to resume:', err)
         setError('Failed to resume session. Please try again.')

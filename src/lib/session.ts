@@ -61,7 +61,8 @@ export async function createSession(
   userId: string,
   materialId: string,
   sessionType: SessionType,
-  chapterId?: string
+  chapterId?: string,
+  sectionId?: string
 ): Promise<Session> {
   const { data, error } = await supabase
     .from('sessions')
@@ -70,6 +71,7 @@ export async function createSession(
       material_id: materialId,
       session_type: sessionType,
       ...(chapterId ? { current_chapter_id: chapterId } : {}),
+      ...(sectionId ? { current_section_id: sectionId } : {}),
     })
     .select()
     .single()
