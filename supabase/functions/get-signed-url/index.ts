@@ -111,16 +111,20 @@ Deno.serve(async (req) => {
       ? sections.find((s: { id: string; title: string }) => s.id === session.current_section_id)?.title ?? 'Start'
       : 'Start'
 
-    // Build lesson plan structure
+    // Build lesson plan structure (IDs included so the agent can reference
+    // them in update_session_state tool calls)
     const lessonPlan = chapters.map((chapter: { id: string; title: string; sort_order: number }) => ({
+      chapter_id: chapter.id,
       chapter: chapter.title,
       sections: sections
         .filter((s: { chapter_id: string }) => s.chapter_id === chapter.id)
         .map((section: { id: string; title: string }) => ({
+          section_id: section.id,
           section: section.title,
           concepts: concepts
             .filter((c) => c.section_id === section.id)
             .map((concept) => ({
+              concept_id: concept.id,
               title: concept.title,
               key_facts: concept.key_facts,
               mastery: masteryMap.get(concept.id) ?? 'not_started',
