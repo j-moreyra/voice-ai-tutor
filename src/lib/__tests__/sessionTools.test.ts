@@ -147,9 +147,9 @@ describe('createSessionToolHandler', () => {
     const result = await handler({
       concept_updates: [{ concept_id: 'c1', status: 'mastered' }],
     })
-    expect(result).toBe('error')
+    expect(result).toBe('error: DB down')
     expect(consoleSpy).toHaveBeenCalledWith(
-      'Session tool handler error (non-fatal):',
+      'Session tool handler error:',
       expect.any(Error)
     )
 

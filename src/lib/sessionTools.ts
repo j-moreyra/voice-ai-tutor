@@ -11,7 +11,7 @@ interface UpdateSessionStateParams {
 export function createSessionToolHandler(userId: string, sessionId: string) {
   return async (params: UpdateSessionStateParams): Promise<string> => {
     try {
-      const promises: PromiseLike<unknown>[] = []
+      const errors: string[] = []
 
       if (params.concept_updates?.length) {
         const rows = params.concept_updates.map((u) => ({
@@ -19,24 +19,27 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
           user_id: userId,
           status: u.status,
         }))
-        promises.push(
-          supabase.from('mastery_state').upsert(rows, { onConflict: 'concept_id,user_id' })
-        )
+        const { error } = await supabase
+          .from('mastery_state')
+          .upsert(rows, { onConflict: 'concept_id,user_id' })
+        if (error) errors.push(`mastery update failed: ${error.message}`)
       }
 
       if (params.section_completed) {
-        promises.push(
-          supabase.from('session_sections_completed').insert({
+        const { error } = await supabase
+          .from('session_sections_completed')
+          .insert({
             session_id: sessionId,
             section_id: params.section_completed,
             user_id: userId,
           })
-        )
+        if (error) errors.push(`section_completed failed: ${error.message}`)
       }
 
       if (params.chapter_result) {
-        promises.push(
-          supabase.from('chapter_results').upsert(
+        const { error } = await supabase
+          .from('chapter_results')
+          .upsert(
             {
               chapter_id: params.chapter_result.chapter_id,
               user_id: userId,
@@ -44,27 +47,30 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
             },
             { onConflict: 'chapter_id,user_id' }
           )
-        )
+        if (error) errors.push(`chapter_result failed: ${error.message}`)
       }
 
       if (params.position) {
-        promises.push(
-          supabase
-            .from('sessions')
-            .update({
-              current_chapter_id: params.position.chapter_id,
-              current_section_id: params.position.section_id,
-              current_concept_id: params.position.concept_id,
-            })
-            .eq('id', sessionId)
-        )
+        const { error } = await supabase
+          .from('sessions')
+          .update({
+            current_chapter_id: params.position.chapter_id,
+            current_section_id: params.position.section_id,
+            current_concept_id: params.position.concept_id,
+          })
+          .eq('id', sessionId)
+        if (error) errors.push(`position update failed: ${error.message}`)
       }
 
-      await Promise.all(promises)
+      if (errors.length) {
+        console.error('Session tool handler errors:', errors)
+        return `error: ${errors.join('; ')}`
+      }
+
       return 'ok'
     } catch (err) {
-      console.error('Session tool handler error (non-fatal):', err)
-      return 'error'
+      console.error('Session tool handler error:', err)
+      return `error: ${(err as Error).message}`
     }
   }
 }
