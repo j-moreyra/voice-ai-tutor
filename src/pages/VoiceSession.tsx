@@ -7,7 +7,7 @@ import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
 
-type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
+type Status = 'initializing' | 'connecting' | 'connected' | 'resuming' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
 
 export default function VoiceSession() {
@@ -23,15 +23,17 @@ export default function VoiceSession() {
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
   const [paused, setPaused] = useState(false)
-  const [pausePending, setPausePending] = useState(false)
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
-  const pausePendingRef = useRef(false)
+  const pausedRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
+  // Tracks whether user has ever had a successful connection this mount
+  // (survives pause/resume cycles, unlike connectedAtRef which resets)
+  const hasConnectedRef = useRef(false)
   const statusRef = useRef<Status>('initializing')
 
   useEffect(() => {
@@ -80,71 +82,49 @@ export default function VoiceSession() {
     navigate(`/study/${materialId}`)
   }, [handleEnd, navigate, materialId])
 
-  useEffect(() => {
-    if (!user || !materialId) return
+  // Connect (or reconnect) the ElevenLabs conversation for the current
+  // session.  Called on initial mount and again when unpausing.
+  const connectConversation = useCallback(
+    async (cancelled: { current: boolean }) => {
+      if (!user || !materialId || !sessionIdRef.current) return
 
-    let cancelled = false
+      const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
+      if (cancelled.current) return
 
-    async function start() {
-      // Timeout after 30 seconds if we can't connect
-      const timeoutId = setTimeout(() => {
-        if (!cancelled && (statusRef.current === 'initializing' || statusRef.current === 'connecting')) {
-          setError('Connection timed out. Please check your internet connection and try again.')
-          setStatus('error')
-          stopMediaStream()
-        }
-      }, 30000)
+      const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
 
-      try {
-        // Request mic permission early and store stream for cleanup
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        mediaStreamRef.current = stream
-
-        if (cancelled) return
-
-        // Determine session type and create session
-        const sessionType = await determineSessionType(user!.id, materialId!)
-        if (cancelled) return
-
-        const session = await createSession(user!.id, materialId!, sessionType, chapterId)
-        sessionIdRef.current = session.id
-        if (cancelled) return
-
-        // Get signed URL + dynamic variables from Edge Function
-        setStatus('connecting')
-        const { signedUrl, dynamicVariables } = await getSignedUrl(materialId!, session.id)
-        if (cancelled) return
-
-        // Create client tool handler
-        const toolHandler = createSessionToolHandler(user!.id, session.id)
-
-        // Start ElevenLabs conversation
-        const conversation = await Conversation.startSession({
-          signedUrl,
-          dynamicVariables,
-          overrides: {
-            tts: {
-              speed: speedParam,
-            },
-          },
-          clientTools: {
-            update_session_state: toolHandler,
-          },
-          onConnect: () => {
-            if (!cancelled) {
-              connectedAtRef.current = Date.now()
-              setStatus('connected')
-              setMode('listening')
-            }
-          },
-          onDisconnect: () => {
-            if (!cancelled && !endedRef.current) {
+      const conversation = await Conversation.startSession({
+        signedUrl,
+        dynamicVariables,
+        overrides: {
+          tts: { speed: speedParam },
+        },
+        clientTools: {
+          update_session_state: toolHandler,
+        },
+        onConnect: () => {
+          if (!cancelled.current) {
+            connectedAtRef.current = Date.now()
+            pausedRef.current = false
+            hasConnectedRef.current = true
+            setStatus('connected')
+            setMode('listening')
+            setPaused(false)
+            setMuted(false)
+          }
+        },
+        onDisconnect: () => {
+          if (!cancelled.current && !endedRef.current && !pausedRef.current) {
+            if (statusRef.current === 'connected' || statusRef.current === 'resuming') {
               const connectedDuration = connectedAtRef.current
                 ? (Date.now() - connectedAtRef.current) / 1000
                 : 0
 
-              if (connectedDuration < 30) {
-                // Session ended suspiciously fast — likely credit/config issue
+              // Only suspect credits/config if we've never had a successful
+              // session before AND disconnected within 30s of connecting.
+              // After a pause/resume, a quick disconnect is a connection
+              // issue, not a credits problem.
+              if (connectedDuration < 30 && !hasConnectedRef.current) {
                 setError(
                   'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
                 )
@@ -155,39 +135,71 @@ export default function VoiceSession() {
                   endSession(sessionIdRef.current, 'disconnected').catch(() => {})
                 }
               } else {
-                handleEnd('disconnected')
+                setError('The voice connection was lost. You can try again to reconnect.')
+                setStatus('error')
+                stopMediaStream()
+                if (sessionIdRef.current) {
+                  endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+                }
               }
             }
-          },
-          onModeChange: (newMode: { mode: string }) => {
-            if (!cancelled) {
-              const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
-              setMode(resolved)
-              if (pausePendingRef.current && resolved === 'listening') {
-                pausePendingRef.current = false
-                setPausePending(false)
-                setPaused(true)
-              }
-            }
-          },
-          onError: (err: unknown) => {
-            console.error('ElevenLabs error:', err)
-            if (!cancelled && !endedRef.current) {
-              setError('Connection error. Please try again.')
-              handleEnd('disconnected')
-            }
-          },
-        })
+          }
+        },
+        onModeChange: (newMode: { mode: string }) => {
+          if (!cancelled.current) {
+            const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
+            setMode(resolved)
+          }
+        },
+        onError: (err: unknown) => {
+          console.error('ElevenLabs error:', err)
+          if (!cancelled.current && !endedRef.current) {
+            setError('Connection error. Please try again.')
+            handleEnd('disconnected')
+          }
+        },
+      })
 
-        if (cancelled) {
-          await conversation.endSession()
-          return
+      if (cancelled.current) {
+        await conversation.endSession()
+        return
+      }
+
+      conversationRef.current = conversation
+    },
+    [user, materialId, speedParam, handleEnd, stopMediaStream]
+  )
+
+  useEffect(() => {
+    if (!user || !materialId) return
+
+    const cancelled = { current: false }
+
+    async function start() {
+      const timeoutId = setTimeout(() => {
+        if (!cancelled.current && (statusRef.current === 'initializing' || statusRef.current === 'connecting')) {
+          setError('Connection timed out. Please check your internet connection and try again.')
+          setStatus('error')
+          stopMediaStream()
         }
+      }, 30000)
 
-        conversationRef.current = conversation
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        mediaStreamRef.current = stream
+        if (cancelled.current) return
+
+        const sessionType = await determineSessionType(user!.id, materialId!)
+        if (cancelled.current) return
+
+        const session = await createSession(user!.id, materialId!, sessionType, chapterId)
+        sessionIdRef.current = session.id
+        if (cancelled.current) return
+
+        setStatus('connecting')
+        await connectConversation(cancelled)
       } catch (err) {
-        if (cancelled) return
-        // Clean up orphaned session row if one was created before the failure
+        if (cancelled.current) return
         if (sessionIdRef.current) {
           endSession(sessionIdRef.current, 'disconnected').catch(() => {})
         }
@@ -206,13 +218,13 @@ export default function VoiceSession() {
     start()
 
     return () => {
-      cancelled = true
+      cancelled.current = true
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream, connectConversation])
 
   const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
@@ -222,52 +234,41 @@ export default function VoiceSession() {
     }
   }
 
-  const handlePauseToggle = () => {
-    // Cancel a pending pause
-    if (pausePendingRef.current) {
-      pausePendingRef.current = false
-      setPausePending(false)
-      setMuted(false)
-      setMicEnabled(true)
-      conversationRef.current?.setVolume({ volume: 1 })
-      conversationRef.current?.sendContextualUpdate(
-        'Student cancelled pause, continue normally.'
-      )
-      return
-    }
-
-    // Unpause
+  const handlePauseToggle = async () => {
     if (paused) {
-      setPaused(false)
-      setMuted(false)
-      setMicEnabled(true)
-      conversationRef.current?.setVolume({ volume: 1 })
-      conversationRef.current?.sendContextualUpdate(
-        'The student has unpaused. Briefly recap what you were saying before the pause, then continue from that point.'
-      )
+      // Unpause — reconnect to ElevenLabs with fresh signed URL.
+      // The Edge Function reads current position/mastery from the DB,
+      // so the agent picks up exactly where the student left off.
+      setStatus('resuming')
+      setMode('connecting')
+      try {
+        await connectConversation({ current: false })
+      } catch (err) {
+        console.error('Failed to resume:', err)
+        setError('Failed to resume session. Please try again.')
+        setStatus('error')
+      }
       return
     }
 
-    // Pause — instruct agent to stop, then mute audio so any remaining
-    // speech is silenced.  The contextual update is sent first so the agent
-    // can process it before we cut audio.
-    conversationRef.current?.sendContextualUpdate(
-      'The student has paused the session. STOP speaking immediately. Do NOT continue teaching or advance through any material. When the student unpauses, repeat the last thing you were saying so they don\'t miss anything.'
-    )
-    conversationRef.current?.setVolume({ volume: 0 })
+    // Pause — fully disconnect ElevenLabs so the agent stops completely.
+    // No speech, no progression, no tool calls — a true pause.
+    pausedRef.current = true
+    setPaused(true)
     setMuted(true)
     setMicEnabled(false)
-
-    if (mode === 'speaking') {
-      pausePendingRef.current = true
-      setPausePending(true)
-    } else {
-      setPaused(true)
+    try {
+      if (conversationRef.current) {
+        await conversationRef.current.endSession()
+        conversationRef.current = null
+      }
+    } catch {
+      // ignore cleanup errors
     }
   }
 
   const handleMuteToggle = () => {
-    if (paused || pausePendingRef.current) return
+    if (paused) return
     const next = !muted
     setMuted(next)
     setMicEnabled(!next)
@@ -337,9 +338,9 @@ export default function VoiceSession() {
           </div>
         ) : (
           <div className="text-center">
-            <SessionStatus mode={mode} />
-            {pausePending && (
-              <p className="mt-4 text-sm text-warning animate-pulse">Pausing...</p>
+            <SessionStatus mode={paused ? 'listening' : mode} />
+            {status === 'resuming' && !paused && (
+              <p className="mt-4 text-sm text-accent animate-pulse">Resuming...</p>
             )}
             {paused && (
               <p className="mt-4 text-sm text-warning animate-pulse">Paused</p>
@@ -349,7 +350,7 @@ export default function VoiceSession() {
       </main>
 
       {/* Bottom bar */}
-      {status === 'connected' && (
+      {(status === 'connected' || status === 'resuming' || paused) && (
         <footer className="flex items-center justify-center gap-6 px-5 py-5">
           <button
             onClick={handleEndClick}
@@ -360,12 +361,15 @@ export default function VoiceSession() {
 
           <button
             onClick={handlePauseToggle}
+            disabled={status === 'resuming'}
             className={`btn-press flex flex-col items-center justify-center rounded-full transition-all duration-200 ${
-              paused || pausePending
+              paused
                 ? 'h-14 w-14 bg-warning/20 text-warning'
-                : 'h-14 w-14 bg-surface-hover text-text-secondary'
-            } ${pausePending ? 'animate-pulse' : ''}`}
-            title={paused ? 'Resume' : pausePending ? 'Cancel pause' : 'Pause'}
+                : status === 'resuming'
+                  ? 'h-14 w-14 bg-accent/20 text-accent animate-pulse'
+                  : 'h-14 w-14 bg-surface-hover text-text-secondary'
+            }`}
+            title={paused ? 'Resume' : status === 'resuming' ? 'Resuming...' : 'Pause'}
           >
             {paused ? (
               /* Play icon */
@@ -382,15 +386,15 @@ export default function VoiceSession() {
 
           <button
             onClick={handleMuteToggle}
-            disabled={paused || pausePending}
+            disabled={paused || status === 'resuming'}
             className={`btn-press rounded-full p-4 transition-all duration-200 ${
-              paused || pausePending
+              paused || status === 'resuming'
                 ? 'cursor-not-allowed opacity-40 bg-surface text-text-muted'
                 : muted
                   ? 'bg-danger-soft text-danger'
                   : 'bg-surface text-text-secondary hover:bg-surface-hover'
             }`}
-            title={paused || pausePending ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
+            title={paused ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
           >
             {muted ? (
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
