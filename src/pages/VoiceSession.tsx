@@ -81,87 +81,87 @@ export default function VoiceSession() {
     navigate(`/study/${materialId}`)
   }, [handleEnd, navigate, materialId])
 
-  // Connect (or reconnect) the ElevenLabs conversation for the current
-  // session.  Called on initial mount and again when unpausing.
-  const connectConversation = useCallback(
-    async (cancelled: { current: boolean }) => {
-      if (!user || !materialId || !sessionIdRef.current) return
+  // Starts (or restarts) an ElevenLabs conversation for the current session.
+  // Stored in a ref so it can be called from both the initial useEffect and
+  // from handlePauseToggle without being a useEffect dependency (which would
+  // cause the effect to re-fire and disconnect the conversation).
+  const connectConversationRef = useRef<(cancelled: { current: boolean }) => Promise<void>>()
+  connectConversationRef.current = async (cancelled: { current: boolean }) => {
+    if (!user || !materialId || !sessionIdRef.current) return
 
-      const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
-      if (cancelled.current) return
+    const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
+    if (cancelled.current) return
 
-      const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
+    const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
 
-      const conversation = await Conversation.startSession({
-        signedUrl,
-        dynamicVariables,
-        overrides: {
-          tts: { speed: speedParam },
-        },
-        clientTools: {
-          update_session_state: toolHandler,
-        },
-        onConnect: () => {
-          if (!cancelled.current) {
-            connectedAtRef.current = Date.now()
-            connectCountRef.current += 1
-            pausedRef.current = false
-            setStatus('connected')
-            setMode('listening')
-            setPaused(false)
-            setMuted(false)
-          }
-        },
-        onDisconnect: () => {
-          if (!cancelled.current && !endedRef.current && !pausedRef.current) {
-            if (statusRef.current === 'connected' || statusRef.current === 'resuming') {
-              const connectedDuration = connectedAtRef.current
-                ? (Date.now() - connectedAtRef.current) / 1000
-                : 0
+    const conversation = await Conversation.startSession({
+      signedUrl,
+      dynamicVariables,
+      overrides: {
+        tts: { speed: speedParam },
+      },
+      clientTools: {
+        update_session_state: toolHandler,
+      },
+      onConnect: () => {
+        if (!cancelled.current) {
+          connectedAtRef.current = Date.now()
+          connectCountRef.current += 1
+          pausedRef.current = false
+          setStatus('connected')
+          setMode('listening')
+          setPaused(false)
+          setMuted(false)
+        }
+      },
+      onDisconnect: () => {
+        if (!cancelled.current && !endedRef.current && !pausedRef.current) {
+          if (statusRef.current === 'connected' || statusRef.current === 'resuming') {
+            const connectedDuration = connectedAtRef.current
+              ? (Date.now() - connectedAtRef.current) / 1000
+              : 0
 
-              endedRef.current = true
-              stopMediaStream()
-              if (sessionIdRef.current) {
-                endSession(sessionIdRef.current, 'disconnected').catch(() => {})
-              }
-
-              // First connection dropping within 30s = likely credits/config.
-              // Reconnections (after pause/resume) dropping = connection issue.
-              if (connectedDuration < 30 && connectCountRef.current <= 1) {
-                setError(
-                  'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
-                )
-              } else {
-                setError('The voice connection was lost. You can try again to reconnect.')
-              }
-              setStatus('error')
+            endedRef.current = true
+            stopMediaStream()
+            if (sessionIdRef.current) {
+              endSession(sessionIdRef.current, 'disconnected').catch(() => {})
             }
-          }
-        },
-        onModeChange: (newMode: { mode: string }) => {
-          if (!cancelled.current) {
-            const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
-            setMode(resolved)
-          }
-        },
-        onError: (err: unknown) => {
-          console.error('ElevenLabs error:', err)
-          if (!cancelled.current && !endedRef.current) {
-            setError('Connection error. Please try again.')
-            handleEnd('disconnected')
-          }
-        },
-      })
 
-      if (cancelled.current) {
-        await conversation.endSession()
-        return
-      }
+            // First connection dropping within 30s = likely credits/config.
+            // Reconnections (after pause/resume) dropping = connection issue.
+            if (connectedDuration < 30 && connectCountRef.current <= 1) {
+              setError(
+                'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
+              )
+            } else {
+              setError('The voice connection was lost. You can try again to reconnect.')
+            }
+            setStatus('error')
+          }
+        }
+      },
+      onModeChange: (newMode: { mode: string }) => {
+        if (!cancelled.current) {
+          const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
+          setMode(resolved)
+        }
+      },
+      onError: (err: unknown) => {
+        console.error('ElevenLabs error:', err)
+        if (!cancelled.current && !endedRef.current) {
+          setError('Connection error. Please try again.')
+          handleEnd('disconnected')
+        }
+      },
+    })
 
-      conversationRef.current = conversation
-    },
-    [user, materialId, speedParam, handleEnd, stopMediaStream]
-  )
+    if (cancelled.current) {
+      await conversation.endSession()
+      return
+    }
+
+    conversationRef.current = conversation
+  }
 
   useEffect(() => {
     if (!user || !materialId) return
@@ -190,7 +190,7 @@ export default function VoiceSession() {
         if (cancelled.current) return
 
         setStatus('connecting')
-        await connectConversation(cancelled)
+        await connectConversationRef.current!(cancelled)
       } catch (err) {
         if (cancelled.current) return
         if (sessionIdRef.current) {
@@ -217,7 +217,7 @@ export default function VoiceSession() {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, speedParam, handleEnd, stopMediaStream, connectConversation])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
 
   const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
@@ -235,7 +235,7 @@ export default function VoiceSession() {
       setStatus('resuming')
       setMode('connecting')
       try {
-        await connectConversation({ current: false })
+        await connectConversationRef.current!({ current: false })
       } catch (err) {
         console.error('Failed to resume:', err)
         setError('Failed to resume session. Please try again.')
