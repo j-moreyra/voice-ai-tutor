@@ -47,7 +47,7 @@ describe('createSessionToolHandler', () => {
     expect(fromCalls).toHaveLength(0)
   })
 
-  it('upserts mastery_state for concept_updates', async () => {
+  it('upserts mastery_state individually for concept_updates', async () => {
     const handler = createSessionToolHandler(userId, sessionId)
     const result = await handler({
       concept_updates: [
@@ -56,27 +56,59 @@ describe('createSessionToolHandler', () => {
       ],
     })
     expect(result).toBe('ok')
-    const masteryCall = fromCalls.find((c) => c.table === 'mastery_state')
-    expect(masteryCall).toBeDefined()
-    expect(masteryCall!.chain.upsert).toHaveBeenCalledWith(
-      [
-        { concept_id: 'c1', user_id: userId, status: 'mastered' },
-        { concept_id: 'c2', user_id: userId, status: 'struggling' },
-      ],
+
+    // mastered and struggling need in_progress first, so 2 concepts × 2 calls each = 4
+    const masteryCalls = fromCalls.filter((c) => c.table === 'mastery_state')
+    expect(masteryCalls).toHaveLength(4)
+
+    // First concept: in_progress then mastered
+    expect(masteryCalls[0].chain.upsert).toHaveBeenCalledWith(
+      { concept_id: 'c1', user_id: userId, status: 'in_progress' },
+      { onConflict: 'concept_id,user_id', ignoreDuplicates: true }
+    )
+    expect(masteryCalls[1].chain.upsert).toHaveBeenCalledWith(
+      { concept_id: 'c1', user_id: userId, status: 'mastered' },
+      { onConflict: 'concept_id,user_id' }
+    )
+
+    // Second concept: in_progress then struggling
+    expect(masteryCalls[2].chain.upsert).toHaveBeenCalledWith(
+      { concept_id: 'c2', user_id: userId, status: 'in_progress' },
+      { onConflict: 'concept_id,user_id', ignoreDuplicates: true }
+    )
+    expect(masteryCalls[3].chain.upsert).toHaveBeenCalledWith(
+      { concept_id: 'c2', user_id: userId, status: 'struggling' },
       { onConflict: 'concept_id,user_id' }
     )
   })
 
-  it('inserts session_sections_completed for section_completed', async () => {
+  it('does not insert intermediate in_progress for in_progress updates', async () => {
+    const handler = createSessionToolHandler(userId, sessionId)
+    await handler({
+      concept_updates: [{ concept_id: 'c1', status: 'in_progress' }],
+    })
+
+    const masteryCalls = fromCalls.filter((c) => c.table === 'mastery_state')
+    expect(masteryCalls).toHaveLength(1)
+    expect(masteryCalls[0].chain.upsert).toHaveBeenCalledWith(
+      { concept_id: 'c1', user_id: userId, status: 'in_progress' },
+      { onConflict: 'concept_id,user_id' }
+    )
+  })
+
+  it('upserts session_sections_completed for section_completed', async () => {
     const handler = createSessionToolHandler(userId, sessionId)
     await handler({ section_completed: 'sec-1' })
     const sectionCall = fromCalls.find((c) => c.table === 'session_sections_completed')
     expect(sectionCall).toBeDefined()
-    expect(sectionCall!.chain.insert).toHaveBeenCalledWith({
-      session_id: sessionId,
-      section_id: 'sec-1',
-      user_id: userId,
-    })
+    expect(sectionCall!.chain.upsert).toHaveBeenCalledWith(
+      {
+        session_id: sessionId,
+        section_id: 'sec-1',
+        user_id: userId,
+      },
+      { onConflict: 'session_id,section_id' }
+    )
   })
 
   it('upserts chapter_results for chapter_result', async () => {
@@ -124,7 +156,6 @@ describe('createSessionToolHandler', () => {
       position: { chapter_id: 'ch-3', section_id: 'sec-2', concept_id: 'c1' },
     })
     expect(result).toBe('ok')
-    expect(fromCalls).toHaveLength(4)
     const tables = fromCalls.map((c) => c.table).sort()
     expect(tables).toEqual(['chapter_results', 'mastery_state', 'session_sections_completed', 'sessions'])
   })
@@ -135,9 +166,31 @@ describe('createSessionToolHandler', () => {
     expect(fromCalls).toHaveLength(0)
   })
 
-  it('returns error and logs on exception', async () => {
+  it('returns ok even on exception to keep session alive', async () => {
     // Override the mock to throw
-    const origFrom = (await import('../supabase')).supabase.from
+    const supabaseMod = await import('../supabase')
+    const originalFrom = supabaseMod.supabase.from
+    supabaseMod.supabase.from = () => { throw new Error('DB down') }
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handler = createSessionToolHandler(userId, sessionId)
+    const result = await handler({
+      concept_updates: [{ concept_id: 'c1', status: 'mastered' }],
+    })
+    // Always returns 'ok' to keep the ElevenLabs session alive
+    expect(result).toBe('ok')
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Mastery update exception for c1:',
+      expect.any(Error)
+    )
+
+    // Restore
+    supabaseMod.supabase.from = originalFrom
+    warnSpy.mockRestore()
+  })
+
+  it('returns ok even when outer try/catch fires', async () => {
+    // Override the mock to throw for a non-concept operation
     const supabaseMod = await import('../supabase')
     const originalFrom = supabaseMod.supabase.from
     supabaseMod.supabase.from = () => { throw new Error('DB down') }
@@ -145,9 +198,9 @@ describe('createSessionToolHandler', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const handler = createSessionToolHandler(userId, sessionId)
     const result = await handler({
-      concept_updates: [{ concept_id: 'c1', status: 'mastered' }],
+      section_completed: 'sec-1',
     })
-    expect(result).toBe('error: DB down')
+    expect(result).toBe('ok')
     expect(consoleSpy).toHaveBeenCalledWith(
       'Session tool handler error:',
       expect.any(Error)
