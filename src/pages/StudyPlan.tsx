@@ -232,7 +232,15 @@ export default function StudyPlan() {
                 )?.id ??
                 plan.chapters[0]?.id
               if (targetChapterId) {
-                navigate(`/session/${materialId}?chapterId=${targetChapterId}&speed=${speed}`)
+                // Find the first section with unmastered concepts in the target chapter
+                const targetChapter = plan.chapters.find((ch) => ch.id === targetChapterId)
+                const targetSectionId = targetChapter?.sections.find((s) =>
+                  s.concepts.some((c) => c.mastery !== 'mastered')
+                )?.id ?? targetChapter?.sections[0]?.id
+                const params = new URLSearchParams({ speed: String(speed) })
+                params.set('chapterId', targetChapterId)
+                if (targetSectionId) params.set('sectionId', targetSectionId)
+                navigate(`/session/${materialId}?${params}`)
               }
             }}
             className="btn-press h-[48px] w-full rounded-btn bg-accent text-base font-semibold text-white shadow-[0_0_24px_var(--color-accent-glow)] transition-all duration-200 hover:bg-accent-hover hover:shadow-[0_0_30px_var(--color-accent-glow)]"
