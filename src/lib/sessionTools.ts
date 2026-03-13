@@ -99,6 +99,39 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
           console.warn('position update failed:', error.message)
           warnings.push(`position: ${error.message}`)
         }
+      } else if (params.concept_updates?.length) {
+        // Auto-update session position from the last concept update so that
+        // pause/resume picks up where the student actually is, even if the
+        // agent didn't send an explicit position update.
+        const lastConceptId = params.concept_updates[params.concept_updates.length - 1].concept_id
+        try {
+          const { data: concept } = await supabase
+            .from('concepts')
+            .select('section_id')
+            .eq('id', lastConceptId)
+            .single()
+
+          if (concept) {
+            const { data: section } = await supabase
+              .from('sections')
+              .select('chapter_id')
+              .eq('id', concept.section_id)
+              .single()
+
+            if (section) {
+              await supabase
+                .from('sessions')
+                .update({
+                  current_chapter_id: section.chapter_id,
+                  current_section_id: concept.section_id,
+                  current_concept_id: lastConceptId,
+                })
+                .eq('id', sessionId)
+            }
+          }
+        } catch (err) {
+          console.warn('Auto position update failed:', err)
+        }
       }
 
       // Always return 'ok' to the agent to prevent it from ending the
