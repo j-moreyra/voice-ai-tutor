@@ -97,7 +97,7 @@ export default function VoiceSession() {
     // this as a continuation — picking up from the last recorded position
     // instead of restarting from the beginning of the section.
     const vars = resume
-      ? { ...dynamicVariables, session_type: 'disconnected' }
+      ? { ...dynamicVariables, session_type: 'paused' }
       : dynamicVariables
 
     const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
