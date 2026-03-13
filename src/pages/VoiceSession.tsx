@@ -105,9 +105,7 @@ export default function VoiceSession() {
     const conversation = await Conversation.startSession({
       signedUrl,
       dynamicVariables: vars,
-      overrides: {
-        tts: { speed: speedParam },
-      },
+      ...(speedParam !== 1 ? { overrides: { tts: { speed: speedParam } } } : {}),
       clientTools: {
         update_session_state: toolHandler,
       },
@@ -139,7 +137,9 @@ export default function VoiceSession() {
             // Reconnections (after pause/resume) dropping = connection issue.
             if (connectedDuration < 30 && connectCountRef.current <= 1) {
               setError(
-                'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
+                speedParam !== 1
+                  ? 'The session failed to start with the selected voice speed. TTS overrides must be enabled in the ElevenLabs dashboard (Agent → Settings → Security → enable TTS overrides). Try again with default speed or enable overrides.'
+                  : 'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
               )
             } else {
               setError('The voice connection was lost. You can try again to reconnect.')
