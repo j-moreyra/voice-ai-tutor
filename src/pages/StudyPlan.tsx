@@ -111,7 +111,7 @@ export default function StudyPlan() {
   const [plan, setPlan] = useState<StudyPlanData | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedChapterId, setExpandedChapterId] = useState<string | null>(null)
-  const [speed, setSpeed] = useState(1.0)
+  // const [speed, setSpeed] = useState(1.0) // Disabled: V3 TTS model does not support speed overrides
 
   const load = useCallback(async () => {
     if (!user || !materialId) return
@@ -205,7 +205,7 @@ export default function StudyPlan() {
       {/* Fixed bottom CTA */}
       <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-bg/90 px-5 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg">
         <div className="mx-auto max-w-[640px] py-4">
-          {/* Voice speed slider */}
+          {/* Voice speed slider — commented out: V3 TTS model does not support speed overrides
           <div className="mb-3 flex items-center gap-3">
             <svg className="h-4 w-4 shrink-0 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z" />
@@ -222,6 +222,7 @@ export default function StudyPlan() {
             />
             <span className="w-8 text-right text-xs font-medium text-accent">{speed.toFixed(1)}x</span>
           </div>
+          */}
 
           <button
             onClick={() => {
@@ -237,7 +238,7 @@ export default function StudyPlan() {
                 const targetSectionId = targetChapter?.sections.find((s) =>
                   s.concepts.some((c) => c.mastery !== 'mastered')
                 )?.id ?? targetChapter?.sections[0]?.id
-                const params = new URLSearchParams({ speed: String(speed) })
+                const params = new URLSearchParams()
                 params.set('chapterId', targetChapterId)
                 if (targetSectionId) params.set('sectionId', targetSectionId)
                 navigate(`/session/${materialId}?${params}`)
