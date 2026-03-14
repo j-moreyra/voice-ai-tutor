@@ -97,9 +97,47 @@ Deno.serve(async (req) => {
 
     // Find last completed concept (last concept with mastered/struggling status by sort order)
     let lastConceptCompleted = 'None'
+    let currentConceptInProgress = 'None'
     if (session.current_concept_id) {
       const currentConcept = concepts.find((c) => c.id === session.current_concept_id)
-      if (currentConcept) lastConceptCompleted = currentConcept.title
+      if (currentConcept) {
+        const status = masteryMap.get(currentConcept.id) ?? 'not_started'
+        if (status === 'mastered') {
+          lastConceptCompleted = currentConcept.title
+        } else {
+          // The student was in the middle of this concept (in_progress, struggling, etc.)
+          currentConceptInProgress = currentConcept.title
+          // Walk backwards to find the last truly completed concept
+          const idx = concepts.indexOf(currentConcept)
+          for (let i = idx - 1; i >= 0; i--) {
+            if (masteryMap.get(concepts[i].id) === 'mastered') {
+              lastConceptCompleted = concepts[i].title
+              break
+            }
+          }
+        }
+      }
+    } else {
+      // No explicit position stored — derive from mastery state.
+      // Walk the lesson plan in order and find the furthest concept with progress.
+      for (let i = concepts.length - 1; i >= 0; i--) {
+        const status = masteryMap.get(concepts[i].id)
+        if (status === 'in_progress' || status === 'struggling') {
+          currentConceptInProgress = concepts[i].title
+          // Keep looking backwards for the last mastered one
+          for (let j = i - 1; j >= 0; j--) {
+            if (masteryMap.get(concepts[j].id) === 'mastered') {
+              lastConceptCompleted = concepts[j].title
+              break
+            }
+          }
+          break
+        }
+        if (status === 'mastered') {
+          lastConceptCompleted = concepts[i].title
+          break
+        }
+      }
     }
 
     // Current position
@@ -173,6 +211,7 @@ Deno.serve(async (req) => {
       concepts_struggling: strugglingConcepts.map((c) => c.title).join(', ') || 'None',
       concepts_skipped: skippedConcepts.map((c) => c.title).join(', ') || 'None',
       last_concept_completed: lastConceptCompleted,
+      current_concept_in_progress: currentConceptInProgress,
       current_chapter: currentChapter,
       current_section: currentSection,
       lesson_plan: JSON.stringify(lessonPlan),
