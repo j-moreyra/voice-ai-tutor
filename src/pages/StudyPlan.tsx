@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { fetchStudyPlan, subscribeStudyPlan } from '../lib/study'
 import type { StudyPlan as StudyPlanData, StudyChapter } from '../lib/study'
-import MasteryBadge from '../components/MasteryBadge'
+// import MasteryBadge from '../components/MasteryBadge' // Hidden: concept-level bullets removed from study plan view
 import ProgressBar from '../components/ProgressBar'
 
 function MasteryRing({ mastered, total }: { mastered: number; total: number }) {
@@ -88,6 +88,7 @@ function ChapterAccordion({
           {chapter.sections.map((section) => (
             <div key={section.id} className="mt-4 first:mt-0">
               <p className="text-xs font-semibold uppercase tracking-wider text-text-secondary">{section.title}</p>
+              {/* Concept-level bullets hidden — too granular for the study plan view
               <ul className="mt-2 space-y-1.5">
                 {section.concepts.map((concept) => (
                   <li key={concept.id} className="flex items-center gap-2.5 pl-1">
@@ -96,6 +97,7 @@ function ChapterAccordion({
                   </li>
                 ))}
               </ul>
+              */}
             </div>
           ))}
         </div>
