@@ -241,37 +241,24 @@ export default function VoiceSession() {
     }
   }
 
-  const handlePauseToggle = async () => {
+  const handlePauseToggle = () => {
     if (paused) {
-      // Unpause — reconnect to ElevenLabs with fresh signed URL.
-      // The Edge Function reads current position/mastery from the DB,
-      // so the agent picks up exactly where the student left off.
-      setStatus('resuming')
-      setMode('connecting')
-      try {
-        await connectConversationRef.current!({ current: false }, true)
-      } catch (err) {
-        console.error('Failed to resume:', err)
-        setError('Failed to resume session. Please try again.')
-        setStatus('error')
-      }
+      // Unpause — just unmute the mic. The student will naturally say
+      // something ("okay keep going") which Claude hears and responds to.
+      setPaused(false)
+      setMuted(false)
+      setMicEnabled(true)
       return
     }
 
-    // Pause — fully disconnect ElevenLabs so the agent stops completely.
-    // No speech, no progression, no tool calls — a true pause.
-    pausedRef.current = true
+    // Pause — mute the mic and tell Claude to stop speaking and wait.
+    // The WebSocket stays connected so context is preserved.
     setPaused(true)
     setMuted(true)
     setMicEnabled(false)
-    try {
-      if (conversationRef.current) {
-        await conversationRef.current.endSession()
-        conversationRef.current = null
-      }
-    } catch {
-      // ignore cleanup errors
-    }
+    conversationRef.current?.sendContextualUpdate(
+      'The student has paused. Stop speaking and wait silently.'
+    )
   }
 
   const handleMuteToggle = () => {
