@@ -3,10 +3,20 @@ import type { Session, SessionType, EndReason } from '../types/database'
 
 const DISCONNECT_THRESHOLD_MS = 15 * 60 * 1000 // 15 minutes
 
+export interface SessionTypeResult {
+  sessionType: SessionType
+  /** Position from the previous session, carried forward on disconnect so the new session resumes where the student left off. */
+  previousPosition?: {
+    chapterId: string | null
+    sectionId: string | null
+    conceptId: string | null
+  }
+}
+
 export async function determineSessionType(
   userId: string,
   materialId: string
-): Promise<SessionType> {
+): Promise<SessionTypeResult> {
   // Get most recent session
   const { data: sessions } = await supabase
     .from('sessions')
@@ -16,10 +26,16 @@ export async function determineSessionType(
     .order('started_at', { ascending: false })
     .limit(1)
 
-  if (!sessions?.length) return 'first_session'
+  if (!sessions?.length) return { sessionType: 'first_session' }
 
   const last = sessions[0] as Session
   const now = Date.now()
+
+  const previousPosition = {
+    chapterId: last.current_chapter_id,
+    sectionId: last.current_section_id,
+    conceptId: last.current_concept_id,
+  }
 
   // Handle orphaned sessions (app crash / browser closed without ending)
   if (!last.ended_at) {
@@ -32,7 +48,7 @@ export async function determineSessionType(
     )
 
     if (elapsed < DISCONNECT_THRESHOLD_MS) {
-      return 'disconnected'
+      return { sessionType: 'disconnected', previousPosition }
     }
   }
 
@@ -41,7 +57,7 @@ export async function determineSessionType(
     if (last.ended_at) {
       const endedAt = new Date(last.ended_at).getTime()
       if (now - endedAt < DISCONNECT_THRESHOLD_MS) {
-        return 'disconnected'
+        return { sessionType: 'disconnected', previousPosition }
       }
     }
   }
@@ -52,9 +68,9 @@ export async function determineSessionType(
     p_material_id: materialId,
   })
 
-  if (isComplete) return 'returning_completed'
+  if (isComplete) return { sessionType: 'returning_completed' }
 
-  return 'returning'
+  return { sessionType: 'returning' }
 }
 
 export async function createSession(
@@ -62,7 +78,8 @@ export async function createSession(
   materialId: string,
   sessionType: SessionType,
   chapterId?: string,
-  sectionId?: string
+  sectionId?: string,
+  conceptId?: string
 ): Promise<Session> {
   const { data, error } = await supabase
     .from('sessions')
@@ -72,6 +89,7 @@ export async function createSession(
       session_type: sessionType,
       ...(chapterId ? { current_chapter_id: chapterId } : {}),
       ...(sectionId ? { current_section_id: sectionId } : {}),
+      ...(conceptId ? { current_concept_id: conceptId } : {}),
     })
     .select()
     .single()

@@ -190,10 +190,16 @@ export default function VoiceSession() {
         mediaStreamRef.current = stream
         if (cancelled.current) return
 
-        const sessionType = await determineSessionType(user!.id, materialId!)
+        const { sessionType, previousPosition } = await determineSessionType(user!.id, materialId!)
         if (cancelled.current) return
 
-        const session = await createSession(user!.id, materialId!, sessionType, chapterId, sectionId)
+        // On disconnect, carry forward the position from the old session so the
+        // edge function can tell the AI exactly where the student left off.
+        const resumeChapterId = chapterId ?? previousPosition?.chapterId ?? undefined
+        const resumeSectionId = sectionId ?? previousPosition?.sectionId ?? undefined
+        const resumeConceptId = previousPosition?.conceptId ?? undefined
+
+        const session = await createSession(user!.id, materialId!, sessionType, resumeChapterId, resumeSectionId, resumeConceptId)
         sessionIdRef.current = session.id
         if (cancelled.current) return
 
