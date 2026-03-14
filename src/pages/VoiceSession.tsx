@@ -257,7 +257,7 @@ export default function VoiceSession() {
     setMuted(true)
     setMicEnabled(false)
     conversationRef.current?.sendContextualUpdate(
-      'The student has paused. Stop speaking and wait silently.'
+      'The student has paused the session. Use the skip_turn tool to stay silent and wait for the student to speak again. Do not say anything.'
     )
   }
 
