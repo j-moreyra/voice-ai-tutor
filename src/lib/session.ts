@@ -102,13 +102,15 @@ export async function endSession(
   sessionId: string,
   endReason: EndReason
 ): Promise<void> {
-  await supabase
+  const { error } = await supabase
     .from('sessions')
     .update({
       ended_at: new Date().toISOString(),
       end_reason: endReason,
     })
     .eq('id', sessionId)
+
+  if (error) throw new Error(`Failed to end session: ${error.message}`)
 }
 
 export interface SignedUrlResult {
