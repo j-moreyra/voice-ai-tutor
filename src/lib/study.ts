@@ -105,6 +105,39 @@ export async function fetchStudyPlan(userId: string, materialId: string): Promis
 
 export function subscribeStudyPlan(userId: string, materialId: string, onUpdate: () => void) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let chapterIds = new Set<string>()
+  let conceptIds = new Set<string>()
+
+  void (async () => {
+    try {
+      const chaptersRes = await supabase
+        .from('chapters')
+        .select('id')
+        .eq('material_id', materialId)
+
+      const chapters = (chaptersRes.data as Array<{ id: string }> | null) ?? []
+      chapterIds = new Set(chapters.map((c) => c.id))
+
+      if (!chapterIds.size) return
+
+      const sectionsRes = await supabase
+        .from('sections')
+        .select('id')
+        .in('chapter_id', Array.from(chapterIds))
+
+      const sectionIds = ((sectionsRes.data as Array<{ id: string }> | null) ?? []).map((s) => s.id)
+      if (!sectionIds.length) return
+
+      const conceptsRes = await supabase
+        .from('concepts')
+        .select('id')
+        .in('section_id', sectionIds)
+
+      conceptIds = new Set(((conceptsRes.data as Array<{ id: string }> | null) ?? []).map((c) => c.id))
+    } catch (err) {
+      console.warn('Failed to preload study subscription scope:', err)
+    }
+  })()
 
   const debouncedUpdate = () => {
     if (debounceTimer) clearTimeout(debounceTimer)
@@ -112,6 +145,18 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
       debounceTimer = null
       onUpdate()
     }, 250)
+  }
+
+  const handleMasteryEvent = (payload: { new?: { concept_id?: string }; old?: { concept_id?: string } }) => {
+    const conceptId = payload.new?.concept_id ?? payload.old?.concept_id
+    if (conceptIds.size && conceptId && !conceptIds.has(conceptId)) return
+    debouncedUpdate()
+  }
+
+  const handleChapterResultEvent = (payload: { new?: { chapter_id?: string }; old?: { chapter_id?: string } }) => {
+    const chapterId = payload.new?.chapter_id ?? payload.old?.chapter_id
+    if (chapterIds.size && chapterId && !chapterIds.has(chapterId)) return
+    debouncedUpdate()
   }
 
   const channel = supabase
@@ -124,7 +169,7 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'mastery_state',
         filter: `user_id=eq.${userId}`,
       },
-      debouncedUpdate
+      handleMasteryEvent
     )
     .on(
       'postgres_changes',
@@ -134,7 +179,7 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'chapter_results',
         filter: `user_id=eq.${userId}`,
       },
-      debouncedUpdate
+      handleChapterResultEvent
     )
     .subscribe()
 
