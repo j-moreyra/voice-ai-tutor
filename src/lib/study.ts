@@ -104,6 +104,16 @@ export async function fetchStudyPlan(userId: string, materialId: string): Promis
 }
 
 export function subscribeStudyPlan(userId: string, materialId: string, onUpdate: () => void) {
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  const debouncedUpdate = () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null
+      onUpdate()
+    }, 250)
+  }
+
   const channel = supabase
     .channel(`study-${materialId}`)
     .on(
@@ -114,7 +124,7 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'mastery_state',
         filter: `user_id=eq.${userId}`,
       },
-      onUpdate
+      debouncedUpdate
     )
     .on(
       'postgres_changes',
@@ -124,11 +134,12 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'chapter_results',
         filter: `user_id=eq.${userId}`,
       },
-      onUpdate
+      debouncedUpdate
     )
     .subscribe()
 
   return () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
     supabase.removeChannel(channel)
   }
 }

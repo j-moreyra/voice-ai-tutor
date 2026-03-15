@@ -218,7 +218,7 @@ describe('subscribeStudyPlan', () => {
         table: 'mastery_state',
         filter: 'user_id=eq.user1',
       }),
-      onUpdate
+      expect.any(Function)
     )
   })
 
@@ -233,7 +233,7 @@ describe('subscribeStudyPlan', () => {
         table: 'chapter_results',
         filter: 'user_id=eq.user1',
       }),
-      onUpdate
+      expect.any(Function)
     )
   })
 
