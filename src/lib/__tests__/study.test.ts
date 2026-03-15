@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 function createChainableQuery(result: { data?: unknown; error?: unknown } = { data: null }) {
   const chain: Record<string, unknown> = {}
-  const methods = ['select', 'insert', 'update', 'delete', 'upsert', 'eq', 'order', 'limit', 'single']
+  const methods = ['select', 'insert', 'update', 'delete', 'upsert', 'eq', 'in', 'order', 'limit', 'single']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
