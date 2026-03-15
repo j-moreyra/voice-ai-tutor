@@ -39,7 +39,7 @@ export default function VoiceSession() {
   // WebSocket drops (caused by the browser throttling background tabs)
   // as real disconnects.
   const visibilityHiddenRef = useRef(false)
-  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastHiddenAtRef = useRef<number>(0)
 
   useEffect(() => {
     statusRef.current = status
@@ -51,14 +51,9 @@ export default function VoiceSession() {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         visibilityHiddenRef.current = true
+        lastHiddenAtRef.current = Date.now()
       } else {
         visibilityHiddenRef.current = false
-        // Cancel any deferred disconnect — the tab is back and the
-        // connection may still be alive.
-        if (disconnectTimerRef.current) {
-          clearTimeout(disconnectTimerRef.current)
-          disconnectTimerRef.current = null
-        }
         // Send a contextual update to signal activity and prevent
         // ElevenLabs turn timeout from firing.
         conversationRef.current?.sendContextualUpdate(
@@ -142,19 +137,13 @@ export default function VoiceSession() {
         if (cancelled.current || endedRef.current) return
         if (statusRef.current !== 'connected') return
 
-        // If the tab is (or was just) in the background, the browser
-        // may have throttled the WebSocket. Defer the disconnect
-        // handling to give the connection a chance to recover.
-        if (visibilityHiddenRef.current) {
-          if (!disconnectTimerRef.current) {
-            disconnectTimerRef.current = setTimeout(() => {
-              disconnectTimerRef.current = null
-              // Re-check — the tab may have come back and reconnected
-              if (!endedRef.current && statusRef.current === 'connected') {
-                handleRealDisconnect()
-              }
-            }, 5000)
-          }
+        // If the tab is hidden or was hidden recently (within 5s), this
+        // is likely a transient disconnect caused by the browser throttling
+        // background tabs. Ignore it — the WebSocket will usually recover
+        // when the tab becomes active again.
+        const recentlyHidden = Date.now() - lastHiddenAtRef.current < 5000
+        if (visibilityHiddenRef.current || recentlyHidden) {
+          console.warn('Ignoring disconnect — tab is/was recently hidden')
           return
         }
 
@@ -261,11 +250,11 @@ export default function VoiceSession() {
     start()
 
     return () => {
+      // Don't tear down the session if the tab is just being hidden/suspended.
+      // Only explicit user actions (Back button) should end the session.
+      if (document.hidden) return
+
       cancelled.current = true
-      if (disconnectTimerRef.current) {
-        clearTimeout(disconnectTimerRef.current)
-        disconnectTimerRef.current = null
-      }
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
