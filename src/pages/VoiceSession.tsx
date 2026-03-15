@@ -264,7 +264,6 @@ export default function VoiceSession() {
     setMicEnabled(false)
     conversationRef.current?.setVolume({ volume: 0 })
   }
-  }
 
   const handleMuteToggle = () => {
     if (paused) return
