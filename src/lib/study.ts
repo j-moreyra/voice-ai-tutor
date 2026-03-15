@@ -109,30 +109,34 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
   let conceptIds = new Set<string>()
 
   void (async () => {
-    const chaptersRes = await supabase
-      .from('chapters')
-      .select('id')
-      .eq('material_id', materialId)
+    try {
+      const chaptersRes = await supabase
+        .from('chapters')
+        .select('id')
+        .eq('material_id', materialId)
 
-    const chapters = (chaptersRes.data as Array<{ id: string }> | null) ?? []
-    chapterIds = new Set(chapters.map((c) => c.id))
+      const chapters = (chaptersRes.data as Array<{ id: string }> | null) ?? []
+      chapterIds = new Set(chapters.map((c) => c.id))
 
-    if (!chapterIds.size) return
+      if (!chapterIds.size) return
 
-    const sectionsRes = await supabase
-      .from('sections')
-      .select('id')
-      .in('chapter_id', Array.from(chapterIds))
+      const sectionsRes = await supabase
+        .from('sections')
+        .select('id')
+        .in('chapter_id', Array.from(chapterIds))
 
-    const sectionIds = ((sectionsRes.data as Array<{ id: string }> | null) ?? []).map((s) => s.id)
-    if (!sectionIds.length) return
+      const sectionIds = ((sectionsRes.data as Array<{ id: string }> | null) ?? []).map((s) => s.id)
+      if (!sectionIds.length) return
 
-    const conceptsRes = await supabase
-      .from('concepts')
-      .select('id')
-      .in('section_id', sectionIds)
+      const conceptsRes = await supabase
+        .from('concepts')
+        .select('id')
+        .in('section_id', sectionIds)
 
-    conceptIds = new Set(((conceptsRes.data as Array<{ id: string }> | null) ?? []).map((c) => c.id))
+      conceptIds = new Set(((conceptsRes.data as Array<{ id: string }> | null) ?? []).map((c) => c.id))
+    } catch (err) {
+      console.warn('Failed to preload study subscription scope:', err)
+    }
   })()
 
   const debouncedUpdate = () => {
