@@ -15,7 +15,7 @@ function isRetryableErrorMessage(message: string): boolean {
   return RETRYABLE_ERROR_SNIPPETS.some((snippet) => lower.includes(snippet))
 }
 
-async function runWithRetry<T>(op: () => Promise<T>): Promise<T> {
+async function runWithRetry<T>(op: () => PromiseLike<T>): Promise<T> {
   try {
     return await op()
   } catch (err) {
@@ -64,7 +64,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
               )
             }
 
-            const { error } = await runWithRetry(() =>
+            const masteryResult = await runWithRetry(() =>
               supabase
                 .from('mastery_state')
                 .upsert(
@@ -72,6 +72,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
                   { onConflict: 'concept_id,user_id' }
                 )
             )
+            const { error } = masteryResult as { error?: { message: string } | null }
             if (error) {
               console.warn(`Mastery update failed for ${update.concept_id}:`, error.message)
               warnings.push(`mastery(${update.concept_id}): ${error.message}`)
@@ -83,7 +84,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.section_completed) {
-        const { error } = await runWithRetry(() =>
+        const sectionResult = await runWithRetry(() =>
           supabase
             .from('session_sections_completed')
             .upsert(
@@ -95,6 +96,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
               { onConflict: 'session_id,section_id' }
             )
         )
+        const { error } = sectionResult as { error?: { message: string } | null }
         if (error) {
           console.warn('section_completed failed:', error.message)
           warnings.push(`section_completed: ${error.message}`)
@@ -102,18 +104,20 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.chapter_result) {
-        const { error } = await runWithRetry(() =>
+        const chapterResult = params.chapter_result
+        const chapterResultWrite = await runWithRetry(() =>
           supabase
             .from('chapter_results')
             .upsert(
               {
-                chapter_id: params.chapter_result.chapter_id,
+                chapter_id: chapterResult.chapter_id,
                 user_id: userId,
-                result: params.chapter_result.result,
+                result: chapterResult.result,
               },
               { onConflict: 'chapter_id,user_id' }
             )
         )
+        const { error } = chapterResultWrite as { error?: { message: string } | null }
         if (error) {
           console.warn('chapter_result failed:', error.message)
           warnings.push(`chapter_result: ${error.message}`)
@@ -121,16 +125,18 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.position) {
-        const { error } = await runWithRetry(() =>
+        const position = params.position
+        const positionResult = await runWithRetry(() =>
           supabase
             .from('sessions')
             .update({
-              current_chapter_id: params.position.chapter_id,
-              current_section_id: params.position.section_id,
-              current_concept_id: params.position.concept_id,
+              current_chapter_id: position.chapter_id,
+              current_section_id: position.section_id,
+              current_concept_id: position.concept_id,
             })
             .eq('id', sessionId)
         )
+        const { error } = positionResult as { error?: { message: string } | null }
         if (error) {
           console.warn('position update failed:', error.message)
           warnings.push(`position: ${error.message}`)
