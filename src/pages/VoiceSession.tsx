@@ -243,25 +243,26 @@ export default function VoiceSession() {
 
   const handlePauseToggle = () => {
     if (paused) {
-      // Unpause — restore audio and unmute the mic. The student will
-      // naturally say something ("okay keep going") which Claude hears
-      // and responds to from the existing conversation context.
+      // Unpause — restore audio, unmute the mic, and prompt Claude to
+      // check in with the student so they can decide whether to back up
+      // or continue from wherever Claude currently is.
       setPaused(false)
       setMuted(false)
       setMicEnabled(true)
       conversationRef.current?.setVolume({ volume: 1 })
+      conversationRef.current?.sendContextualUpdate(
+        'The student stepped away briefly and is now back. They may have missed some of what you said. Ask them "Want me to repeat anything, or should I keep going?" and wait for their response. Do NOT restart the session or re-introduce yourself.'
+      )
       return
     }
 
-    // Pause — mute the mic, silence agent output, and tell Claude to
-    // stop and wait. The WebSocket stays connected so context is preserved.
+    // Pause — mute the mic and silence agent output. No contextual
+    // update needed — just go silent on both ends. The WebSocket stays
+    // connected so conversation context is fully preserved.
     setPaused(true)
     setMuted(true)
     setMicEnabled(false)
     conversationRef.current?.setVolume({ volume: 0 })
-    conversationRef.current?.sendContextualUpdate(
-      'The student has paused the session. Use the skip_turn tool to stay silent and wait for the student to speak again. Do not say anything.'
-    )
   }
 
   const handleMuteToggle = () => {
