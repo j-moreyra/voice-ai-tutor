@@ -15,6 +15,8 @@ export default function VoiceSession() {
   const [searchParams] = useSearchParams()
   const chapterId = searchParams.get('chapterId') ?? undefined
   const sectionId = searchParams.get('sectionId') ?? undefined
+  const chapterName = searchParams.get('chapter') ?? undefined
+  const sectionName = searchParams.get('section') ?? undefined
   // Voice speed override (requires TTS overrides enabled in ElevenLabs dashboard:
   // Agent → Settings → Security tab → enable overrides for TTS/Voice settings)
   const speedParam = parseFloat(searchParams.get('speed') ?? '1.0') || 1.0
@@ -233,10 +235,6 @@ export default function VoiceSession() {
     setMicEnabled(!next)
   }
 
-  const handleEndClick = () => {
-    handleEnd('student_departure')
-  }
-
   if (status === 'error') {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center px-5">
@@ -279,7 +277,15 @@ export default function VoiceSession() {
           </svg>
           Back
         </button>
-        <p className="text-sm font-medium text-text-secondary">Study Session</p>
+        <div className="text-center">
+          <p className="text-sm font-medium text-text-secondary">Study Session</p>
+          {chapterName && (
+            <p className="mt-0.5 text-sm text-text-muted">{chapterName}</p>
+          )}
+          {sectionName && (
+            <p className="text-sm text-text-muted">{sectionName}</p>
+          )}
+        </div>
         <div className="w-12" /> {/* Spacer for centering */}
       </header>
 
@@ -305,13 +311,6 @@ export default function VoiceSession() {
       {/* Bottom bar */}
       {status === 'connected' && (
         <footer className="flex items-center justify-center gap-6 px-5 py-5">
-          <button
-            onClick={handleEndClick}
-            className="text-sm text-text-muted transition-colors hover:text-danger"
-          >
-            End Session
-          </button>
-
           <button
             onClick={handleMuteToggle}
             className={`btn-press rounded-full p-4 transition-all duration-200 ${
