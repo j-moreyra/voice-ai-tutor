@@ -176,8 +176,20 @@ describe('createSession', () => {
 describe('endSession', () => {
   it('updates the session with end reason and timestamp', async () => {
     queryResult = { data: null, error: null }
+
     await endSession('sess1', 'student_departure')
+
     expect(mockFrom).toHaveBeenCalledWith('sessions')
+    const chain = mockFrom.mock.results[0]?.value as ReturnType<typeof createChainableQuery>
+    expect(chain.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        end_reason: 'student_departure',
+        ended_at: expect.any(String),
+      })
+    )
+    const payload = chain.update.mock.calls[0][0] as { ended_at: string }
+    expect(new Date(payload.ended_at).toString()).not.toBe('Invalid Date')
+    expect(chain.eq).toHaveBeenCalledWith('id', 'sess1')
   })
 
   it('handles all end reasons', async () => {
@@ -187,6 +199,13 @@ describe('endSession', () => {
       await endSession('sess1', reason)
     }
     expect(mockFrom).toHaveBeenCalledTimes(reasons.length)
+  })
+
+  it('throws when update fails', async () => {
+    queryResult = { data: null, error: { message: 'Update failed' } }
+
+    await expect(endSession('sess1', 'timeout'))
+      .rejects.toThrow('Failed to end session: Update failed')
   })
 })
 

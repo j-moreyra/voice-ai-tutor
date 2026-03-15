@@ -46,8 +46,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
 
     if (uploadError) {
       setError(uploadError)
-    } else {
-      onUploadComplete()
     }
   }, [user, onUploadComplete])
 
