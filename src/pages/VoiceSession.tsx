@@ -35,10 +35,40 @@ export default function VoiceSession() {
   // How many times we've connected (0 = never, 1 = first, 2+ = after pause/resume)
   const connectCountRef = useRef(0)
   const statusRef = useRef<Status>('initializing')
+  // Track when the tab is backgrounded so we don't treat transient
+  // WebSocket drops (caused by the browser throttling background tabs)
+  // as real disconnects.
+  const visibilityHiddenRef = useRef(false)
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  // Track tab visibility so we can distinguish real disconnects from
+  // browser-throttled background tab drops.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        visibilityHiddenRef.current = true
+      } else {
+        visibilityHiddenRef.current = false
+        // Cancel any deferred disconnect — the tab is back and the
+        // connection may still be alive.
+        if (disconnectTimerRef.current) {
+          clearTimeout(disconnectTimerRef.current)
+          disconnectTimerRef.current = null
+        }
+        // Send a contextual update to signal activity and prevent
+        // ElevenLabs turn timeout from firing.
+        conversationRef.current?.sendContextualUpdate(
+          'The student switched back to this tab. Continue the conversation normally.'
+        )
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
 
   const stopMediaStream = useCallback(() => {
     if (mediaStreamRef.current) {
@@ -109,31 +139,49 @@ export default function VoiceSession() {
         }
       },
       onDisconnect: () => {
-        if (!cancelled.current && !endedRef.current) {
-          if (statusRef.current === 'connected') {
-            const connectedDuration = connectedAtRef.current
-              ? (Date.now() - connectedAtRef.current) / 1000
-              : 0
+        if (cancelled.current || endedRef.current) return
+        if (statusRef.current !== 'connected') return
 
-            endedRef.current = true
-            stopMediaStream()
-            if (sessionIdRef.current) {
-              endSession(sessionIdRef.current, 'disconnected').catch(() => {})
-            }
-
-            // First connection dropping within 30s = likely credits/config.
-            // Reconnections (after pause/resume) dropping = connection issue.
-            if (connectedDuration < 30 && connectCountRef.current <= 1) {
-              setError(
-                speedParam !== 1
-                  ? 'The session failed to start with the selected voice speed. TTS overrides must be enabled in the ElevenLabs dashboard (Agent → Settings → Security → enable TTS overrides). Try again with default speed or enable overrides.'
-                  : 'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
-              )
-            } else {
-              setError('The voice connection was lost. You can try again to reconnect.')
-            }
-            setStatus('error')
+        // If the tab is (or was just) in the background, the browser
+        // may have throttled the WebSocket. Defer the disconnect
+        // handling to give the connection a chance to recover.
+        if (visibilityHiddenRef.current) {
+          if (!disconnectTimerRef.current) {
+            disconnectTimerRef.current = setTimeout(() => {
+              disconnectTimerRef.current = null
+              // Re-check — the tab may have come back and reconnected
+              if (!endedRef.current && statusRef.current === 'connected') {
+                handleRealDisconnect()
+              }
+            }, 5000)
           }
+          return
+        }
+
+        handleRealDisconnect()
+
+        function handleRealDisconnect() {
+          const connectedDuration = connectedAtRef.current
+            ? (Date.now() - connectedAtRef.current) / 1000
+            : 0
+
+          endedRef.current = true
+          stopMediaStream()
+          if (sessionIdRef.current) {
+            endSession(sessionIdRef.current, 'disconnected').catch(() => {})
+          }
+
+          // First connection dropping within 30s = likely credits/config.
+          if (connectedDuration < 30 && connectCountRef.current <= 1) {
+            setError(
+              speedParam !== 1
+                ? 'The session failed to start with the selected voice speed. TTS overrides must be enabled in the ElevenLabs dashboard (Agent → Settings → Security → enable TTS overrides). Try again with default speed or enable overrides.'
+                : 'The session ended unexpectedly. This may be due to insufficient credits or a configuration issue. Please check your account and try again.'
+            )
+          } else {
+            setError('The voice connection was lost. You can try again to reconnect.')
+          }
+          setStatus('error')
         }
       },
       onModeChange: (newMode: { mode: string }) => {
@@ -214,6 +262,10 @@ export default function VoiceSession() {
 
     return () => {
       cancelled.current = true
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current)
+        disconnectTimerRef.current = null
+      }
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
