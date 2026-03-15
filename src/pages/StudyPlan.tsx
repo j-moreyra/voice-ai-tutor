@@ -243,6 +243,9 @@ export default function StudyPlan() {
                 const params = new URLSearchParams()
                 params.set('chapterId', targetChapterId)
                 if (targetSectionId) params.set('sectionId', targetSectionId)
+                if (targetChapter?.title) params.set('chapter', targetChapter.title)
+                const targetSection = targetChapter?.sections.find((s) => s.id === targetSectionId)
+                if (targetSection?.title) params.set('section', targetSection.title)
                 navigate(`/session/${materialId}?${params}`)
               }
             }}
