@@ -7,7 +7,7 @@ import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
 
-type Status = 'initializing' | 'connecting' | 'connected' | 'resuming' | 'ended' | 'error'
+type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
 
 export default function VoiceSession() {
@@ -23,14 +23,12 @@ export default function VoiceSession() {
   const [mode, setMode] = useState<Mode>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
-  const [paused, setPaused] = useState(false)
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const endedRef = useRef(false)
-  const pausedRef = useRef(false)
   const connectedAtRef = useRef<number | null>(null)
   // How many times we've connected (0 = never, 1 = first, 2+ = after pause/resume)
   const connectCountRef = useRef(0)
@@ -82,29 +80,19 @@ export default function VoiceSession() {
     navigate(`/study/${materialId}`)
   }, [handleEnd, navigate, materialId])
 
-  // Starts (or restarts) an ElevenLabs conversation for the current session.
-  // Stored in a ref so it can be called from both the initial useEffect and
-  // from handlePauseToggle without being a useEffect dependency (which would
-  // cause the effect to re-fire and disconnect the conversation).
-  const connectConversationRef = useRef<(cancelled: { current: boolean }, resume?: boolean) => Promise<void>>()
-  connectConversationRef.current = async (cancelled: { current: boolean }, resume = false) => {
+  // Starts an ElevenLabs conversation for the current session.
+  const connectConversationRef = useRef<(cancelled: { current: boolean }) => Promise<void>>()
+  connectConversationRef.current = async (cancelled: { current: boolean }) => {
     if (!user || !materialId || !sessionIdRef.current) return
 
     const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
     if (cancelled.current) return
 
-    // When resuming from pause, override session_type so the agent treats
-    // this as a continuation — picking up from the last recorded position
-    // instead of restarting from the beginning of the section.
-    const vars = resume
-      ? { ...dynamicVariables, session_type: 'paused' }
-      : dynamicVariables
-
     const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
 
     const conversation = await Conversation.startSession({
       signedUrl,
-      dynamicVariables: vars,
+      dynamicVariables,
       ...(speedParam !== 1 ? { overrides: { tts: { speed: speedParam } } } : {}),
       clientTools: {
         update_session_state: toolHandler,
@@ -113,16 +101,14 @@ export default function VoiceSession() {
         if (!cancelled.current) {
           connectedAtRef.current = Date.now()
           connectCountRef.current += 1
-          pausedRef.current = false
           setStatus('connected')
           setMode('listening')
-          setPaused(false)
           setMuted(false)
         }
       },
       onDisconnect: () => {
-        if (!cancelled.current && !endedRef.current && !pausedRef.current) {
-          if (statusRef.current === 'connected' || statusRef.current === 'resuming') {
+        if (!cancelled.current && !endedRef.current) {
+          if (statusRef.current === 'connected') {
             const connectedDuration = connectedAtRef.current
               ? (Date.now() - connectedAtRef.current) / 1000
               : 0
@@ -241,32 +227,7 @@ export default function VoiceSession() {
     }
   }
 
-  const handlePauseToggle = () => {
-    if (paused) {
-      // Unpause — restore audio, unmute the mic, and prompt Claude to
-      // check in with the student so they can decide whether to back up
-      // or continue from wherever Claude currently is.
-      setPaused(false)
-      setMuted(false)
-      setMicEnabled(true)
-      conversationRef.current?.setVolume({ volume: 1 })
-      conversationRef.current?.sendContextualUpdate(
-        'The student stepped away briefly and is now back. They may have missed some of what you said. Ask them "Want me to repeat anything, or should I keep going?" and wait for their response. Do NOT restart the session or re-introduce yourself.'
-      )
-      return
-    }
-
-    // Pause — mute the mic and silence agent output. No contextual
-    // update needed — just go silent on both ends. The WebSocket stays
-    // connected so conversation context is fully preserved.
-    setPaused(true)
-    setMuted(true)
-    setMicEnabled(false)
-    conversationRef.current?.setVolume({ volume: 0 })
-  }
-
   const handleMuteToggle = () => {
-    if (paused) return
     const next = !muted
     setMuted(next)
     setMicEnabled(!next)
@@ -336,19 +297,13 @@ export default function VoiceSession() {
           </div>
         ) : (
           <div className="text-center">
-            <SessionStatus mode={paused ? 'listening' : mode} />
-            {status === 'resuming' && !paused && (
-              <p className="mt-4 text-sm text-accent animate-pulse">Resuming...</p>
-            )}
-            {paused && (
-              <p className="mt-4 text-sm text-warning animate-pulse">Paused</p>
-            )}
+            <SessionStatus mode={mode} />
           </div>
         )}
       </main>
 
       {/* Bottom bar */}
-      {(status === 'connected' || status === 'resuming' || paused) && (
+      {status === 'connected' && (
         <footer className="flex items-center justify-center gap-6 px-5 py-5">
           <button
             onClick={handleEndClick}
@@ -358,41 +313,13 @@ export default function VoiceSession() {
           </button>
 
           <button
-            onClick={handlePauseToggle}
-            disabled={status === 'resuming'}
-            className={`btn-press flex flex-col items-center justify-center rounded-full transition-all duration-200 ${
-              paused
-                ? 'h-14 w-14 bg-warning/20 text-warning'
-                : status === 'resuming'
-                  ? 'h-14 w-14 bg-accent/20 text-accent animate-pulse'
-                  : 'h-14 w-14 bg-surface-hover text-text-secondary'
-            }`}
-            title={paused ? 'Resume' : status === 'resuming' ? 'Resuming...' : 'Pause'}
-          >
-            {paused ? (
-              /* Play icon */
-              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5.14v14l11-7-11-7Z" />
-              </svg>
-            ) : (
-              /* Pause icon */
-              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M6 4h4v16H6V4Zm8 0h4v16h-4V4Z" />
-              </svg>
-            )}
-          </button>
-
-          <button
             onClick={handleMuteToggle}
-            disabled={paused || status === 'resuming'}
             className={`btn-press rounded-full p-4 transition-all duration-200 ${
-              paused || status === 'resuming'
-                ? 'cursor-not-allowed opacity-40 bg-surface text-text-muted'
-                : muted
-                  ? 'bg-danger-soft text-danger'
-                  : 'bg-surface text-text-secondary hover:bg-surface-hover'
+              muted
+                ? 'bg-danger-soft text-danger'
+                : 'bg-surface text-text-secondary hover:bg-surface-hover'
             }`}
-            title={paused ? 'Mute (paused)' : muted ? 'Unmute' : 'Mute'}
+            title={muted ? 'Unmute' : 'Mute'}
           >
             {muted ? (
               <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
