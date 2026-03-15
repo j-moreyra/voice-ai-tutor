@@ -8,6 +8,32 @@ interface UpdateSessionStateParams {
   position?: { chapter_id: string; section_id: string; concept_id: string }
 }
 
+const RETRYABLE_ERROR_SNIPPETS = ['timeout', 'network', 'fetch', 'connection', 'temporar']
+
+function isRetryableErrorMessage(message: string): boolean {
+  const lower = message.toLowerCase()
+  return RETRYABLE_ERROR_SNIPPETS.some((snippet) => lower.includes(snippet))
+}
+
+async function runWithRetry<T>(op: () => PromiseLike<T>): Promise<T> {
+  try {
+    return await op()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!isRetryableErrorMessage(message)) throw err
+    return await op()
+  }
+}
+
+function emitSessionToolWarnings(sessionId: string, warnings: string[]) {
+  if (!warnings.length || typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent('session-tool-warnings', {
+      detail: { sessionId, warnings },
+    })
+  )
+}
+
 // Valid mastery transitions enforced by the validate_mastery_transition trigger.
 // If the agent skips a step (e.g. not_started → mastered), we insert the
 // intermediate state first so the trigger doesn't reject the update.
@@ -28,20 +54,25 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
             // where the agent marks a concept mastered without first setting
             // it to in_progress (which the DB trigger would reject).
             if (NEEDS_IN_PROGRESS_FIRST.has(update.status)) {
-              await supabase
-                .from('mastery_state')
-                .upsert(
-                  { concept_id: update.concept_id, user_id: userId, status: 'in_progress' as MasteryStatus },
-                  { onConflict: 'concept_id,user_id', ignoreDuplicates: true }
-                )
+              await runWithRetry(() =>
+                supabase
+                  .from('mastery_state')
+                  .upsert(
+                    { concept_id: update.concept_id, user_id: userId, status: 'in_progress' as MasteryStatus },
+                    { onConflict: 'concept_id,user_id', ignoreDuplicates: true }
+                  )
+              )
             }
 
-            const { error } = await supabase
-              .from('mastery_state')
-              .upsert(
-                { concept_id: update.concept_id, user_id: userId, status: update.status },
-                { onConflict: 'concept_id,user_id' }
-              )
+            const masteryResult = await runWithRetry(() =>
+              supabase
+                .from('mastery_state')
+                .upsert(
+                  { concept_id: update.concept_id, user_id: userId, status: update.status },
+                  { onConflict: 'concept_id,user_id' }
+                )
+            )
+            const { error } = masteryResult as { error?: { message: string } | null }
             if (error) {
               console.warn(`Mastery update failed for ${update.concept_id}:`, error.message)
               warnings.push(`mastery(${update.concept_id}): ${error.message}`)
@@ -53,16 +84,19 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.section_completed) {
-        const { error } = await supabase
-          .from('session_sections_completed')
-          .upsert(
-            {
-              session_id: sessionId,
-              section_id: params.section_completed,
-              user_id: userId,
-            },
-            { onConflict: 'session_id,section_id' }
-          )
+        const sectionResult = await runWithRetry(() =>
+          supabase
+            .from('session_sections_completed')
+            .upsert(
+              {
+                session_id: sessionId,
+                section_id: params.section_completed,
+                user_id: userId,
+              },
+              { onConflict: 'session_id,section_id' }
+            )
+        )
+        const { error } = sectionResult as { error?: { message: string } | null }
         if (error) {
           console.warn('section_completed failed:', error.message)
           warnings.push(`section_completed: ${error.message}`)
@@ -70,16 +104,20 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.chapter_result) {
-        const { error } = await supabase
-          .from('chapter_results')
-          .upsert(
-            {
-              chapter_id: params.chapter_result.chapter_id,
-              user_id: userId,
-              result: params.chapter_result.result,
-            },
-            { onConflict: 'chapter_id,user_id' }
-          )
+        const chapterResult = params.chapter_result
+        const chapterResultWrite = await runWithRetry(() =>
+          supabase
+            .from('chapter_results')
+            .upsert(
+              {
+                chapter_id: chapterResult.chapter_id,
+                user_id: userId,
+                result: chapterResult.result,
+              },
+              { onConflict: 'chapter_id,user_id' }
+            )
+        )
+        const { error } = chapterResultWrite as { error?: { message: string } | null }
         if (error) {
           console.warn('chapter_result failed:', error.message)
           warnings.push(`chapter_result: ${error.message}`)
@@ -87,14 +125,18 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       }
 
       if (params.position) {
-        const { error } = await supabase
-          .from('sessions')
-          .update({
-            current_chapter_id: params.position.chapter_id,
-            current_section_id: params.position.section_id,
-            current_concept_id: params.position.concept_id,
-          })
-          .eq('id', sessionId)
+        const position = params.position
+        const positionResult = await runWithRetry(() =>
+          supabase
+            .from('sessions')
+            .update({
+              current_chapter_id: position.chapter_id,
+              current_section_id: position.section_id,
+              current_concept_id: position.concept_id,
+            })
+            .eq('id', sessionId)
+        )
+        const { error } = positionResult as { error?: { message: string } | null }
         if (error) {
           console.warn('position update failed:', error.message)
           warnings.push(`position: ${error.message}`)
@@ -139,6 +181,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
       // for debugging but don't disrupt the session flow.
       if (warnings.length) {
         console.error('Session tool handler warnings:', warnings)
+        emitSessionToolWarnings(sessionId, warnings)
       }
 
       return 'ok'
