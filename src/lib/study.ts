@@ -39,29 +39,33 @@ export interface StudyPlan {
 }
 
 export async function fetchStudyPlan(userId: string, materialId: string): Promise<StudyPlan | null> {
-  const [materialRes, chaptersRes, sectionsRes, conceptsRes, masteryRes, resultsRes] =
-    await Promise.all([
-      supabase.from('materials').select('*').eq('id', materialId).eq('user_id', userId).single(),
-      supabase.from('chapters').select('*').eq('material_id', materialId).order('sort_order'),
-      supabase.from('sections').select('*').order('sort_order'),
-      supabase.from('concepts').select('*').order('sort_order'),
-      supabase.from('mastery_state').select('*').eq('user_id', userId),
-      supabase.from('chapter_results').select('*').eq('user_id', userId),
-    ])
+  const [materialRes, chaptersRes, masteryRes, resultsRes] = await Promise.all([
+    supabase.from('materials').select('*').eq('id', materialId).eq('user_id', userId).single(),
+    supabase.from('chapters').select('*').eq('material_id', materialId).order('sort_order'),
+    supabase.from('mastery_state').select('*').eq('user_id', userId),
+    supabase.from('chapter_results').select('*').eq('user_id', userId),
+  ])
 
   const material = materialRes.data as Material | null
   if (!material) return null
 
   const chapters = (chaptersRes.data as Chapter[]) ?? []
-  const allSections = (sectionsRes.data as Section[]) ?? []
-  const allConcepts = (conceptsRes.data as Concept[]) ?? []
+  const chapterIds = chapters.map((c) => c.id)
+
+  const sectionsRes = chapterIds.length
+    ? await supabase.from('sections').select('*').in('chapter_id', chapterIds).order('sort_order')
+    : { data: [] }
+
+  const sections = (sectionsRes.data as Section[]) ?? []
+  const sectionIds = sections.map((s) => s.id)
+
+  const conceptsRes = sectionIds.length
+    ? await supabase.from('concepts').select('*').in('section_id', sectionIds).order('sort_order')
+    : { data: [] }
+
+  const concepts = (conceptsRes.data as Concept[]) ?? []
   const allMastery = (masteryRes.data as MasteryState[]) ?? []
   const allResults = (resultsRes.data as ChapterResultRecord[]) ?? []
-
-  const chapterIds = new Set(chapters.map((c) => c.id))
-  const sections = allSections.filter((s) => chapterIds.has(s.chapter_id))
-  const sectionIds = new Set(sections.map((s) => s.id))
-  const concepts = allConcepts.filter((c) => sectionIds.has(c.section_id))
 
   const masteryMap = new Map(allMastery.map((m) => [m.concept_id, m.status]))
   const resultMap = new Map(allResults.map((r) => [r.chapter_id, r.result]))
@@ -100,6 +104,57 @@ export async function fetchStudyPlan(userId: string, materialId: string): Promis
 }
 
 export function subscribeStudyPlan(userId: string, materialId: string, onUpdate: () => void) {
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let chapterIds = new Set<string>()
+  let conceptIds = new Set<string>()
+
+  void (async () => {
+    const chaptersRes = await supabase
+      .from('chapters')
+      .select('id')
+      .eq('material_id', materialId)
+
+    const chapters = (chaptersRes.data as Array<{ id: string }> | null) ?? []
+    chapterIds = new Set(chapters.map((c) => c.id))
+
+    if (!chapterIds.size) return
+
+    const sectionsRes = await supabase
+      .from('sections')
+      .select('id')
+      .in('chapter_id', Array.from(chapterIds))
+
+    const sectionIds = ((sectionsRes.data as Array<{ id: string }> | null) ?? []).map((s) => s.id)
+    if (!sectionIds.length) return
+
+    const conceptsRes = await supabase
+      .from('concepts')
+      .select('id')
+      .in('section_id', sectionIds)
+
+    conceptIds = new Set(((conceptsRes.data as Array<{ id: string }> | null) ?? []).map((c) => c.id))
+  })()
+
+  const debouncedUpdate = () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null
+      onUpdate()
+    }, 250)
+  }
+
+  const handleMasteryEvent = (payload: { new?: { concept_id?: string }; old?: { concept_id?: string } }) => {
+    const conceptId = payload.new?.concept_id ?? payload.old?.concept_id
+    if (conceptIds.size && conceptId && !conceptIds.has(conceptId)) return
+    debouncedUpdate()
+  }
+
+  const handleChapterResultEvent = (payload: { new?: { chapter_id?: string }; old?: { chapter_id?: string } }) => {
+    const chapterId = payload.new?.chapter_id ?? payload.old?.chapter_id
+    if (chapterIds.size && chapterId && !chapterIds.has(chapterId)) return
+    debouncedUpdate()
+  }
+
   const channel = supabase
     .channel(`study-${materialId}`)
     .on(
@@ -110,7 +165,7 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'mastery_state',
         filter: `user_id=eq.${userId}`,
       },
-      onUpdate
+      handleMasteryEvent
     )
     .on(
       'postgres_changes',
@@ -120,11 +175,12 @@ export function subscribeStudyPlan(userId: string, materialId: string, onUpdate:
         table: 'chapter_results',
         filter: `user_id=eq.${userId}`,
       },
-      onUpdate
+      handleChapterResultEvent
     )
     .subscribe()
 
   return () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
     supabase.removeChannel(channel)
   }
 }
