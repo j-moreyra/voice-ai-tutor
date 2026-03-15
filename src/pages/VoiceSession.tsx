@@ -35,6 +35,10 @@ export default function VoiceSession() {
   // How many times we've connected (0 = never, 1 = first, 2+ = after pause/resume)
   const connectCountRef = useRef(0)
   const statusRef = useRef<Status>('initializing')
+  // Grace period: don't tear down the session immediately on disconnect.
+  // Give the WebSocket 5 seconds to reconnect (e.g. after a tab switch).
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const disconnectedAtRef = useRef<number>(0)
   // Track when the tab is backgrounded so we don't treat transient
   // WebSocket drops (caused by the browser throttling background tabs)
   // as real disconnects.
@@ -54,6 +58,14 @@ export default function VoiceSession() {
         lastHiddenAtRef.current = Date.now()
       } else {
         visibilityHiddenRef.current = false
+        // If there was a recent disconnect (within 10s) and we haven't
+        // torn down yet, cancel the pending teardown — the tab is back.
+        const timeSinceDisconnect = Date.now() - disconnectedAtRef.current
+        if (disconnectTimerRef.current && timeSinceDisconnect < 10000) {
+          clearTimeout(disconnectTimerRef.current)
+          disconnectTimerRef.current = null
+          console.info('Tab visible again — cancelled pending disconnect teardown')
+        }
         // Send a contextual update to signal activity and prevent
         // ElevenLabs turn timeout from firing.
         conversationRef.current?.sendContextualUpdate(
@@ -126,6 +138,12 @@ export default function VoiceSession() {
       },
       onConnect: () => {
         if (!cancelled.current) {
+          // Cancel any pending disconnect teardown — the connection recovered.
+          if (disconnectTimerRef.current) {
+            clearTimeout(disconnectTimerRef.current)
+            disconnectTimerRef.current = null
+            console.info('Connection recovered — cancelled pending disconnect teardown')
+          }
           connectedAtRef.current = Date.now()
           connectCountRef.current += 1
           setStatus('connected')
@@ -137,19 +155,18 @@ export default function VoiceSession() {
         if (cancelled.current || endedRef.current) return
         if (statusRef.current !== 'connected') return
 
-        // If the tab is hidden or was hidden recently (within 5s), this
-        // is likely a transient disconnect caused by the browser throttling
-        // background tabs. Ignore it — the WebSocket will usually recover
-        // when the tab becomes active again.
-        const recentlyHidden = Date.now() - lastHiddenAtRef.current < 5000
-        if (visibilityHiddenRef.current || recentlyHidden) {
-          console.warn('Ignoring disconnect — tab is/was recently hidden')
-          return
-        }
+        // Never tear down immediately. Record when the disconnect happened
+        // and start a 5-second grace period. If onConnect fires again
+        // within that window (e.g. after a tab switch), the timer is
+        // cancelled and the session continues uninterrupted.
+        disconnectedAtRef.current = Date.now()
+        console.warn('Disconnect detected — starting 5s grace period before teardown')
 
-        handleRealDisconnect()
+        if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current)
+        disconnectTimerRef.current = setTimeout(() => {
+          disconnectTimerRef.current = null
+          if (endedRef.current || cancelled.current) return
 
-        function handleRealDisconnect() {
           const connectedDuration = connectedAtRef.current
             ? (Date.now() - connectedAtRef.current) / 1000
             : 0
@@ -171,7 +188,7 @@ export default function VoiceSession() {
             setError('The voice connection was lost. You can try again to reconnect.')
           }
           setStatus('error')
-        }
+        }, 5000)
       },
       onModeChange: (newMode: { mode: string }) => {
         if (!cancelled.current) {
@@ -255,6 +272,10 @@ export default function VoiceSession() {
       if (document.hidden) return
 
       cancelled.current = true
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current)
+        disconnectTimerRef.current = null
+      }
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
