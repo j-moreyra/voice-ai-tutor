@@ -28,39 +28,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchProfile = useCallback(async (userId: string) => {
     setProfileLoading(true)
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data as Profile | null)
-    setProfileLoading(false)
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (error) {
+        setProfile(null)
+        return
+      }
+      setProfile(data as Profile | null)
+    } finally {
+      setProfileLoading(false)
+    }
   }, [])
 
   useEffect(() => {
-    // Listen for auth changes first so we don't miss events
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
+    let mounted = true
+    let bootstrappedFromEvent = false
+
+    const applySession = (nextSession: Session | null) => {
+      if (!mounted) return
+      setSession(nextSession)
+      setUser(nextSession?.user ?? null)
+      if (nextSession?.user) {
+        fetchProfile(nextSession.user.id)
       } else {
         setProfile(null)
       }
       setLoading(false)
+    }
+
+    // Listen for auth changes first so we don't miss events
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'INITIAL_SESSION') {
+        bootstrappedFromEvent = true
+      }
+      applySession(session)
     })
 
     // Then check for existing session
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
-      }
-      setLoading(false)
+      // Avoid double-initialization if INITIAL_SESSION already fired.
+      if (bootstrappedFromEvent) return
+      applySession(session)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [fetchProfile])
 
   const signUp = async (

@@ -32,14 +32,23 @@ interface MaterialCardProps {
 export default function MaterialCard({ material, onSelect, onDeleted }: MaterialCardProps) {
   const { user } = useAuth()
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!user || deleting) return
     if (!confirm('Delete this material and all its content?')) return
 
+    setDeleteError(null)
     setDeleting(true)
-    await deleteMaterial(user.id, material.id, material.storage_path)
+
+    const error = await deleteMaterial(user.id, material.id, material.storage_path)
+    if (error) {
+      setDeleteError(error)
+      setDeleting(false)
+      return
+    }
+
     onDeleted()
   }
 
@@ -93,6 +102,10 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
             <p className="mt-2.5 text-xs text-danger">
               Processing timed out. Delete and re-upload to try again.
             </p>
+          )}
+
+          {deleteError && (
+            <p className="mt-2.5 text-xs text-danger">Delete failed: {deleteError}</p>
           )}
 
           {isClickable && (

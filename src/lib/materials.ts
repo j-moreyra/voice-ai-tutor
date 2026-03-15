@@ -10,8 +10,23 @@ const ACCEPTED_TYPES: Record<string, FileType> = {
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
+
+const ACCEPTED_EXTENSIONS: Record<string, FileType> = {
+  '.pdf': 'pdf',
+  '.docx': 'docx',
+  '.pptx': 'pptx',
+}
+
+function getExtension(fileName: string): string {
+  const dotIndex = fileName.lastIndexOf('.')
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ''
+}
+
 export function validateFile(file: File): string | null {
-  if (!ACCEPTED_TYPES[file.type]) {
+  const mimeType = ACCEPTED_TYPES[file.type]
+  const extensionType = ACCEPTED_EXTENSIONS[getExtension(file.name)]
+
+  if (!mimeType || !extensionType || mimeType !== extensionType) {
     return 'Only PDF, DOCX, and PPTX files are accepted.'
   }
   if (file.size > MAX_FILE_SIZE) {
