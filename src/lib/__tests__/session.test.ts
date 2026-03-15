@@ -55,14 +55,27 @@ describe('determineSessionType', () => {
   it('returns first_session when no previous sessions exist', async () => {
     queryResult = { data: [] }
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('first_session')
+    expect(type).toEqual({ sessionType: 'first_session' })
   })
 
   it('returns disconnected for orphaned session within 15 minutes', async () => {
     const recentStart = new Date(Date.now() - 5 * 60 * 1000).toISOString() // 5 min ago
-    queryResult = { data: [{ id: 's1', started_at: recentStart, ended_at: null, end_reason: null }] }
+    queryResult = {
+      data: [{
+        id: 's1',
+        started_at: recentStart,
+        ended_at: null,
+        end_reason: null,
+        current_chapter_id: 'ch1',
+        current_section_id: 'sec1',
+        current_concept_id: 'c1',
+      }],
+    }
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('disconnected')
+    expect(type).toEqual({
+      sessionType: 'disconnected',
+      previousPosition: { chapterId: 'ch1', sectionId: 'sec1', conceptId: 'c1' },
+    })
   })
 
   it('returns returning for orphaned session older than 15 minutes', async () => {
@@ -70,7 +83,7 @@ describe('determineSessionType', () => {
     queryResult = { data: [{ id: 's1', started_at: oldStart, ended_at: null, end_reason: null }] }
     mockRpc.mockResolvedValue({ data: false })
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('returning')
+    expect(type).toEqual({ sessionType: 'returning' })
   })
 
   it('returns disconnected for recently disconnected session', async () => {
@@ -84,7 +97,7 @@ describe('determineSessionType', () => {
       }],
     }
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('disconnected')
+    expect(type).toEqual(expect.objectContaining({ sessionType: 'disconnected' }))
   })
 
   it('returns disconnected for recently timed-out session', async () => {
@@ -98,7 +111,7 @@ describe('determineSessionType', () => {
       }],
     }
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('disconnected')
+    expect(type).toEqual(expect.objectContaining({ sessionType: 'disconnected' }))
   })
 
   it('returns returning_completed when material is fully mastered', async () => {
@@ -113,7 +126,7 @@ describe('determineSessionType', () => {
     }
     mockRpc.mockResolvedValue({ data: true })
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('returning_completed')
+    expect(type).toEqual({ sessionType: 'returning_completed' })
   })
 
   it('returns returning when material is not fully mastered', async () => {
@@ -128,7 +141,7 @@ describe('determineSessionType', () => {
     }
     mockRpc.mockResolvedValue({ data: false })
     const type = await determineSessionType('user1', 'mat1')
-    expect(type).toBe('returning')
+    expect(type).toEqual({ sessionType: 'returning' })
   })
 
   it('calls endSession for orphaned sessions', async () => {
@@ -176,8 +189,20 @@ describe('createSession', () => {
 describe('endSession', () => {
   it('updates the session with end reason and timestamp', async () => {
     queryResult = { data: null, error: null }
+
     await endSession('sess1', 'student_departure')
+
     expect(mockFrom).toHaveBeenCalledWith('sessions')
+    const chain = mockFrom.mock.results[0]?.value as ReturnType<typeof createChainableQuery>
+    expect(chain.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        end_reason: 'student_departure',
+        ended_at: expect.any(String),
+      })
+    )
+    const payload = chain.update.mock.calls[0][0] as { ended_at: string }
+    expect(new Date(payload.ended_at).toString()).not.toBe('Invalid Date')
+    expect(chain.eq).toHaveBeenCalledWith('id', 'sess1')
   })
 
   it('handles all end reasons', async () => {
@@ -187,6 +212,13 @@ describe('endSession', () => {
       await endSession('sess1', reason)
     }
     expect(mockFrom).toHaveBeenCalledTimes(reasons.length)
+  })
+
+  it('throws when update fails', async () => {
+    queryResult = { data: null, error: { message: 'Update failed' } }
+
+    await expect(endSession('sess1', 'timeout'))
+      .rejects.toThrow('Failed to end session: Update failed')
   })
 })
 
