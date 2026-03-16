@@ -6,9 +6,16 @@ import { createSessionToolHandler } from '../lib/sessionTools'
 import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
+import type { MessagePayload } from '@elevenlabs/types'
 
 type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
+type TranscriptMessage = {
+  id: string
+  role: 'user' | 'agent'
+  text: string
+  tentative: boolean
+}
 
 export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
@@ -25,6 +32,7 @@ export default function VoiceSession() {
   const [mode, setMode] = useState<Mode>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
+  const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
@@ -44,10 +52,60 @@ export default function VoiceSession() {
   // as real disconnects.
   const visibilityHiddenRef = useRef(false)
   const lastHiddenAtRef = useRef<number>(0)
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [transcript])
+
+  const handleMessage = useCallback((payload: MessagePayload) => {
+    const text = payload.message?.trim()
+    if (!text) return
+
+    const role = payload.role
+    const isTentative = payload.event_id == null
+
+    setTranscript((prev) => {
+      const next = [...prev]
+
+      const findLastTentativeIdx = (targetRole: 'user' | 'agent') => {
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === targetRole && next[i].tentative) return i
+        }
+        return -1
+      }
+
+      if (isTentative) {
+        const tentativeIdx = findLastTentativeIdx(role)
+        if (tentativeIdx >= 0) {
+          next[tentativeIdx] = { ...next[tentativeIdx], text }
+        } else {
+          next.push({ id: `tentative-${role}`, role, text, tentative: true })
+        }
+        return next
+      }
+
+      const finalId = `final-${payload.event_id}`
+      const existingFinalIdx = next.findIndex((m) => m.id === finalId)
+      if (existingFinalIdx >= 0) {
+        next[existingFinalIdx] = { id: finalId, role, text, tentative: false }
+        return next
+      }
+
+      const tentativeIdx = findLastTentativeIdx(role)
+      if (tentativeIdx >= 0) {
+        next[tentativeIdx] = { id: finalId, role, text, tentative: false }
+      } else {
+        next.push({ id: finalId, role, text, tentative: false })
+      }
+
+      return next
+    })
+  }, [])
 
   // Track tab visibility so we can distinguish real disconnects from
   // browser-throttled background tab drops.
@@ -196,6 +254,7 @@ export default function VoiceSession() {
           setMode(resolved)
         }
       },
+      onMessage: handleMessage,
       onError: (err: unknown) => {
         console.error('ElevenLabs error:', err)
         if (!cancelled.current && !endedRef.current) {
@@ -281,7 +340,7 @@ export default function VoiceSession() {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream, handleMessage])
 
   const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
@@ -351,8 +410,8 @@ export default function VoiceSession() {
         <div className="w-12" /> {/* Spacer for centering */}
       </header>
 
-      {/* Center: mode indicator */}
-      <main className="flex flex-1 items-center justify-center animate-fade-in">
+      {/* Center: mode indicator + live transcript */}
+      <main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 pb-6 animate-fade-in">
         {status === 'ended' ? (
           <div className="text-center">
             <SessionStatus mode="ended" />
@@ -367,6 +426,42 @@ export default function VoiceSession() {
           <div className="text-center">
             <SessionStatus mode={mode} />
           </div>
+        )}
+
+        {status !== 'ended' && (
+          <section className="w-full max-w-2xl rounded-2xl border border-border bg-surface/70 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-medium text-text-secondary">Live transcript</p>
+              <p className="text-xs text-text-muted">Auto-updating</p>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+              {transcript.length === 0 ? (
+                <p className="text-sm text-text-muted">Transcript will appear here once the conversation starts.</p>
+              ) : (
+                transcript.map((msg) => {
+                  const isTutor = msg.role === 'agent'
+                  return (
+                    <div key={msg.id} className={`flex ${isTutor ? 'justify-start' : 'justify-end'}`}>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                          isTutor
+                            ? 'bg-accent-soft text-text'
+                            : 'bg-muted text-text'
+                        } ${msg.tentative ? 'opacity-70 italic' : ''}`}
+                      >
+                        <p className="mb-1 text-[11px] uppercase tracking-wide text-text-muted">
+                          {isTutor ? 'Tutor' : 'Student'}
+                        </p>
+                        <p>{msg.text}</p>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+              <div ref={transcriptEndRef} />
+            </div>
+          </section>
         )}
       </main>
 
