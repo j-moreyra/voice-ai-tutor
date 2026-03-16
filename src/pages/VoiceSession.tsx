@@ -194,6 +194,10 @@ export default function VoiceSession() {
       clientTools: {
         update_session_state: toolHandler,
       },
+      workletPaths: {
+        rawAudioProcessor: '/elevenlabs/rawAudioProcessor.js',
+        audioConcatProcessor: '/elevenlabs/audioConcatProcessor.js',
+      },
       onConnect: () => {
         if (!cancelled.current) {
           // Cancel any pending disconnect teardown — the connection recovered.
