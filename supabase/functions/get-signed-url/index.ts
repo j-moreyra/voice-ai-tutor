@@ -85,19 +85,11 @@ Deno.serve(async (req) => {
       sessionRes,
       materialRes,
       chaptersRes,
-      sectionsRes,
-      conceptsRes,
-      masteryRes,
-      questionsRes,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', user.id).single(),
       supabase.from('sessions').select('id, user_id, material_id, session_type, current_chapter_id, current_section_id, current_concept_id').eq('id', session_id).single(),
       supabase.from('materials').select('id, user_id, extracted_text').eq('id', material_id).single(),
       supabase.from('chapters').select('*').eq('material_id', material_id).order('sort_order'),
-      supabase.from('sections').select('*').order('sort_order'),
-      supabase.from('concepts').select('*').order('sort_order'),
-      supabase.from('mastery_state').select('concept_id, status').eq('user_id', user.id),
-      supabase.from('professor_questions').select('*').eq('user_id', user.id),
     ])
 
     const profile = profileRes.data
@@ -118,19 +110,35 @@ Deno.serve(async (req) => {
 
     const materialText = material.extracted_text ?? ''
     const chapters = chaptersRes.data ?? []
-    const allSections = sectionsRes.data ?? []
-    const allConcepts = (conceptsRes.data ?? []) as Concept[]
-    const allMastery = (masteryRes.data ?? []) as MasteryRow[]
-    const allQuestions = questionsRes.data ?? []
+    const chapterIds = chapters.map((c: { id: string }) => c.id)
 
-    const chapterIds = new Set(chapters.map((c: { id: string }) => c.id))
-    const sections = allSections.filter((s: { chapter_id: string }) => chapterIds.has(s.chapter_id))
-    const sectionIds = new Set(sections.map((s: { id: string }) => s.id))
-    const concepts = allConcepts.filter((c) => sectionIds.has(c.section_id))
-    const questions = allQuestions.filter((q: { chapter_id: string }) => chapterIds.has(q.chapter_id))
+    const [sectionsRes, questionsRes] = chapterIds.length
+      ? await Promise.all([
+        supabase.from('sections').select('*').in('chapter_id', chapterIds).order('sort_order'),
+        supabase.from('professor_questions').select('*').eq('user_id', user.id).in('chapter_id', chapterIds),
+      ])
+      : [{ data: [] }, { data: [] }]
 
-    const conceptIds = new Set(concepts.map((c) => c.id))
-    const mastery = allMastery.filter((m) => conceptIds.has(m.concept_id))
+    const sections = sectionsRes.data ?? []
+    const questions = questionsRes.data ?? []
+    const sectionIds = sections.map((s: { id: string }) => s.id)
+
+    const conceptsRes = sectionIds.length
+      ? await supabase.from('concepts').select('*').in('section_id', sectionIds).order('sort_order')
+      : { data: [] }
+
+    const concepts = (conceptsRes.data ?? []) as Concept[]
+    const conceptIds = concepts.map((c) => c.id)
+
+    const masteryRes = conceptIds.length
+      ? await supabase
+        .from('mastery_state')
+        .select('concept_id, status')
+        .eq('user_id', user.id)
+        .in('concept_id', conceptIds)
+      : { data: [] }
+
+    const mastery = (masteryRes.data ?? []) as MasteryRow[]
     const masteryMap = new Map(mastery.map((m) => [m.concept_id, m.status]))
 
     const totalConcepts = concepts.length
