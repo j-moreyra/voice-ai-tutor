@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
@@ -25,43 +25,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [profileLoading, setProfileLoading] = useState(false)
+  const mountedRef = useRef(true)
 
   const fetchProfile = useCallback(async (userId: string) => {
     setProfileLoading(true)
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data as Profile | null)
-    setProfileLoading(false)
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (error) {
+        setProfile(null)
+        return
+      }
+      setProfile(data as Profile | null)
+    } finally {
+      setProfileLoading(false)
+    }
   }, [])
 
-  useEffect(() => {
+  const applySession = useCallback((nextSession: Session | null) => {
+    if (!mountedRef.current) return
+    setSession(nextSession)
+    setUser(nextSession?.user ?? null)
+    if (nextSession?.user) {
+      fetchProfile(nextSession.user.id)
+    } else {
+      setProfile(null)
+    }
+    setLoading(false)
+  }, [fetchProfile])
+
+  const initializeAuthSession = useCallback(() => {
+    let bootstrappedFromEvent = false
+
     // Listen for auth changes first so we don't miss events
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
-      } else {
-        setProfile(null)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'INITIAL_SESSION') {
+        bootstrappedFromEvent = true
       }
-      setLoading(false)
+      applySession(session)
     })
 
     // Then check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
-      }
-      setLoading(false)
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      // Avoid double-initialization if INITIAL_SESSION already fired.
+      if (bootstrappedFromEvent) return
+      applySession(session)
     })
 
-    return () => subscription.unsubscribe()
-  }, [fetchProfile])
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [applySession])
+
+  useEffect(() => {
+    mountedRef.current = true
+    const cleanup = initializeAuthSession()
+    return () => {
+      mountedRef.current = false
+      cleanup()
+    }
+  }, [initializeAuthSession])
 
   const signUp = async (
     email: string,
