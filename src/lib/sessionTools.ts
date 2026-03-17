@@ -145,6 +145,44 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
               ),
           warnings
         )
+
+        // Proactively update header labels to the next section so the UI
+        // doesn't stay stale between section_completed and the first
+        // concept_update in the new section.
+        if (!params.position) {
+          try {
+            const { data: completed } = await supabase
+              .from('sections')
+              .select('chapter_id, sort_order')
+              .eq('id', params.section_completed)
+              .single()
+
+            if (completed) {
+              const { data: nextSection } = await supabase
+                .from('sections')
+                .select('id, title')
+                .eq('chapter_id', completed.chapter_id)
+                .gt('sort_order', completed.sort_order)
+                .order('sort_order')
+                .limit(1)
+                .single()
+
+              if (nextSection) {
+                const { data: chapter } = await supabase
+                  .from('chapters')
+                  .select('title')
+                  .eq('id', completed.chapter_id)
+                  .single()
+
+                if (chapter) {
+                  emitPositionChanged(sessionId, chapter.title, nextSection.title)
+                }
+              }
+            }
+          } catch {
+            // Non-critical — labels will update on next concept_update
+          }
+        }
       }
 
       if (params.chapter_result) {
