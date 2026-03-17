@@ -1,9 +1,13 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { buildCorsHeaders, isOriginAllowed, parseAllowedOrigins } from '../_shared/cors.ts'
 import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.39.0'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')!
+
+const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173']
+const ALLOWED_ORIGINS = parseAllowedOrigins(Deno.env.get('ALLOWED_ORIGINS'), DEFAULT_ALLOWED_ORIGINS)
 
 const STRUCTURING_PROMPT = `You are a curriculum structuring assistant. Analyze the following text extracted from a study material and produce a structured JSON study plan.
 
@@ -71,23 +75,39 @@ interface StructuredPlan {
   chapters: StructuredChapter[]
 }
 
+function jsonResponse(body: unknown, status: number, origin: string | null): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...buildCorsHeaders(origin, ALLOWED_ORIGINS),
+    },
+  })
+}
+
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin')
+
   if (req.method === 'OPTIONS') {
     return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'authorization, content-type',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      },
+      headers: buildCorsHeaders(origin, ALLOWED_ORIGINS),
     })
+  }
+
+  if (origin && !isOriginAllowed(origin, ALLOWED_ORIGINS)) {
+    return jsonResponse({ error: 'Origin not allowed' }, 403, origin)
+  }
+
+
+  if (req.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405, origin)
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  // Verify JWT
   const authHeader = req.headers.get('Authorization')
   if (!authHeader) {
-    return new Response(JSON.stringify({ error: 'Missing authorization' }), { status: 401 })
+    return jsonResponse({ error: 'Missing authorization' }, 401, origin)
   }
 
   const token = authHeader.replace('Bearer ', '')
@@ -96,17 +116,14 @@ Deno.serve(async (req) => {
     error: authError,
   } = await supabase.auth.getUser(token)
   if (authError || !user) {
-    return new Response(JSON.stringify({ error: 'Invalid token' }), { status: 401 })
+    return jsonResponse({ error: 'Invalid token' }, 401, origin)
   }
 
   const { material_id, text_content } = await req.json()
   if (!material_id || !text_content) {
-    return new Response(JSON.stringify({ error: 'Missing material_id or text_content' }), {
-      status: 400,
-    })
+    return jsonResponse({ error: 'Missing material_id or text_content' }, 400, origin)
   }
 
-  // Verify material belongs to user
   const { data: material, error: matError } = await supabase
     .from('materials')
     .select('id, user_id')
@@ -114,23 +131,20 @@ Deno.serve(async (req) => {
     .single()
 
   if (matError || !material || material.user_id !== user.id) {
-    return new Response(JSON.stringify({ error: 'Material not found' }), { status: 404 })
+    return jsonResponse({ error: 'Material not found' }, 404, origin)
   }
 
-  // Update status to processing
   await supabase
     .from('materials')
     .update({ processing_status: 'processing' })
     .eq('id', material_id)
 
   try {
-    // Truncate text if extremely long (Claude context limits)
     const maxChars = 400_000
     const text = text_content.length > maxChars
       ? text_content.slice(0, maxChars) + '\n\n[Content truncated due to length]'
       : text_content
 
-    // Call Claude to structure the content
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
     const message = await anthropic.messages.create({
@@ -149,7 +163,6 @@ Deno.serve(async (req) => {
       .map((block: { type: string; text: string }) => block.text)
       .join('')
 
-    // Parse the JSON response
     const jsonMatch = responseText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       throw new Error('Claude did not return valid JSON')
@@ -161,7 +174,6 @@ Deno.serve(async (req) => {
       throw new Error('No chapters found in structured plan')
     }
 
-    // Insert chapters, sections, concepts, and questions
     for (const chapter of plan.chapters) {
       const { data: chapterRow, error: chapterErr } = await supabase
         .from('chapters')
@@ -179,7 +191,6 @@ Deno.serve(async (req) => {
         continue
       }
 
-      // Build a map of section_title → section_id for question linking
       const sectionMap = new Map<string, string>()
 
       for (const section of chapter.sections) {
@@ -215,7 +226,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Insert professor questions if any
       if (chapter.questions?.length) {
         const questionRows = chapter.questions.map((q) => ({
           chapter_id: chapterRow.id,
@@ -231,15 +241,12 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Mark as completed
     await supabase
       .from('materials')
       .update({ processing_status: 'completed' })
       .eq('id', material_id)
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-    })
+    return jsonResponse({ success: true }, 200, origin)
   } catch (err) {
     console.error('Processing error:', err)
 
@@ -251,9 +258,6 @@ Deno.serve(async (req) => {
       })
       .eq('id', material_id)
 
-    return new Response(JSON.stringify({ error: (err as Error).message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-    })
+    return jsonResponse({ error: (err as Error).message }, 500, origin)
   }
 })
