@@ -7,15 +7,16 @@ import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
 import type { MessagePayload } from '@elevenlabs/types'
-import {
-  mergeTranscriptMessage,
-  parseTentativeAgentDebugMessage,
-  getNextStreamingTentativeText,
-} from '../lib/voiceTranscript'
-import type { TranscriptMessage } from '../lib/voiceTranscript'
 
 type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
+type TranscriptMessage = {
+  id: string
+  role: 'user' | 'agent'
+  text: string
+  tentative: boolean
+}
+
 export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
@@ -61,81 +62,50 @@ export default function VoiceSession() {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [transcript])
 
-  const agentTentativeTargetRef = useRef<string>('')
-  const agentTentativeCurrentRef = useRef<string>('')
-  const agentTentativeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const stopAgentTentativeStreaming = useCallback(() => {
-    if (agentTentativeTimerRef.current) {
-      clearInterval(agentTentativeTimerRef.current)
-      agentTentativeTimerRef.current = null
-    }
-    agentTentativeTargetRef.current = ''
-    agentTentativeCurrentRef.current = ''
-  }, [])
-
-  const queueAgentTentativeStreaming = useCallback((text: string) => {
-    const normalizedTarget = text.trim()
-    if (!normalizedTarget) return
-
-    agentTentativeTargetRef.current = normalizedTarget
-
-    if (agentTentativeCurrentRef.current) {
-      const currentAsText = agentTentativeCurrentRef.current.trim()
-      if (currentAsText && !normalizedTarget.startsWith(currentAsText)) {
-        agentTentativeCurrentRef.current = ''
-      }
-    }
-
-    if (agentTentativeTimerRef.current) return
-
-    agentTentativeTimerRef.current = setInterval(() => {
-      const target = agentTentativeTargetRef.current
-      if (!target) {
-        stopAgentTentativeStreaming()
-        return
-      }
-
-      const nextText = getNextStreamingTentativeText(agentTentativeCurrentRef.current, target)
-      if (!nextText) {
-        stopAgentTentativeStreaming()
-        return
-      }
-
-      if (nextText !== agentTentativeCurrentRef.current) {
-        agentTentativeCurrentRef.current = nextText
-        setTranscript((prev) =>
-          mergeTranscriptMessage(prev, { source: 'ai', role: 'agent', message: nextText })
-        )
-      }
-
-      if (nextText === target) {
-        if (agentTentativeTimerRef.current) {
-          clearInterval(agentTentativeTimerRef.current)
-          agentTentativeTimerRef.current = null
-        }
-      }
-    }, 75)
-  }, [stopAgentTentativeStreaming])
-
   const handleMessage = useCallback((payload: MessagePayload) => {
-    if (payload.role === 'agent' && payload.event_id == null) {
-      queueAgentTentativeStreaming(payload.message)
-      return
-    }
+    const text = payload.message?.trim()
+    if (!text) return
 
-    if (payload.role === 'agent' && payload.event_id != null) {
-      stopAgentTentativeStreaming()
-    }
+    const role = payload.role
+    const isTentative = payload.event_id == null
 
-    setTranscript((prev) => mergeTranscriptMessage(prev, payload))
-  }, [queueAgentTentativeStreaming, stopAgentTentativeStreaming])
+    setTranscript((prev) => {
+      const next = [...prev]
 
-  useEffect(() => {
-    return () => {
-      stopAgentTentativeStreaming()
-    }
-  }, [stopAgentTentativeStreaming])
+      const findLastTentativeIdx = (targetRole: 'user' | 'agent') => {
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === targetRole && next[i].tentative) return i
+        }
+        return -1
+      }
+
+      if (isTentative) {
+        const tentativeIdx = findLastTentativeIdx(role)
+        if (tentativeIdx >= 0) {
+          next[tentativeIdx] = { ...next[tentativeIdx], text }
+        } else {
+          next.push({ id: `tentative-${role}`, role, text, tentative: true })
+        }
+        return next
+      }
+
+      const finalId = `final-${payload.event_id}`
+      const existingFinalIdx = next.findIndex((m) => m.id === finalId)
+      if (existingFinalIdx >= 0) {
+        next[existingFinalIdx] = { id: finalId, role, text, tentative: false }
+        return next
+      }
+
+      const tentativeIdx = findLastTentativeIdx(role)
+      if (tentativeIdx >= 0) {
+        next[tentativeIdx] = { id: finalId, role, text, tentative: false }
+      } else {
+        next.push({ id: finalId, role, text, tentative: false })
+      }
+
+      return next
+    })
+  }, [])
 
   // Track tab visibility so we can distinguish real disconnects from
   // browser-throttled background tab drops.
@@ -186,7 +156,6 @@ export default function VoiceSession() {
         // ignore cleanup errors
       }
 
-      stopAgentTentativeStreaming()
       stopMediaStream()
 
       try {
@@ -200,7 +169,7 @@ export default function VoiceSession() {
       setStatus('ended')
       setMode('ended')
     },
-    [stopMediaStream, stopAgentTentativeStreaming]
+    [stopMediaStream]
   )
 
   const handleBack = useCallback(async () => {
@@ -265,7 +234,6 @@ export default function VoiceSession() {
             : 0
 
           endedRef.current = true
-          stopAgentTentativeStreaming()
           stopMediaStream()
           if (sessionIdRef.current) {
             endSession(sessionIdRef.current, 'disconnected').catch(() => {})
@@ -291,10 +259,6 @@ export default function VoiceSession() {
         }
       },
       onMessage: handleMessage,
-      onDebug: (payload: unknown) => {
-        const tentativeMessage = parseTentativeAgentDebugMessage(payload)
-        if (tentativeMessage) queueAgentTentativeStreaming(tentativeMessage.message)
-      },
       onError: (err: unknown) => {
         console.error('ElevenLabs error:', err)
         if (!cancelled.current && !endedRef.current) {
@@ -375,13 +339,12 @@ export default function VoiceSession() {
         clearTimeout(disconnectTimerRef.current)
         disconnectTimerRef.current = null
       }
-      stopAgentTentativeStreaming()
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, speedParam, handleEnd, stopMediaStream, handleMessage, stopAgentTentativeStreaming])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream, handleMessage])
 
   const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
@@ -472,11 +435,11 @@ export default function VoiceSession() {
         {status !== 'ended' && (
           <section className="w-full max-w-2xl rounded-2xl border border-border bg-surface/70 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-medium text-text-secondary">Live captions</p>
-              <p className="text-xs text-text-muted">Streaming word-by-word</p>
+              <p className="text-sm font-medium text-text-secondary">Live transcript</p>
+              <p className="text-xs text-text-muted">Auto-updating</p>
             </div>
 
-            <div aria-live="polite" aria-atomic="false" className="max-h-64 overflow-y-auto space-y-2 pr-1">
+            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
               {transcript.length === 0 ? (
                 <p className="text-sm text-text-muted">Transcript will appear here once the conversation starts.</p>
               ) : (

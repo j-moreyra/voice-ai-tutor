@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { AUTH_CALLBACK_TIMEOUT_MS, hasSession } from '../lib/authFlow'
 
 export default function AuthCallback() {
   const navigate = useNavigate()
@@ -20,14 +19,14 @@ export default function AuthCallback() {
 
     // Listen for auth state changes (handles hash fragment parsing)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (hasSession(session)) {
+      if (session) {
         complete()
       }
     })
 
     // Also check if session already exists
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (hasSession(session)) {
+      if (session) {
         complete()
       }
     })
@@ -39,7 +38,7 @@ export default function AuthCallback() {
       resolved = true
       subscription.unsubscribe()
       setError('Authentication is taking longer than expected. Please try signing in again.')
-    }, AUTH_CALLBACK_TIMEOUT_MS)
+    }, 15000)
 
     return () => {
       resolved = true

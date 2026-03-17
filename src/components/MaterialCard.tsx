@@ -2,7 +2,6 @@ import { useState } from 'react'
 import type { Material, ProcessingStatus } from '../types/database'
 import { deleteMaterial } from '../lib/materials'
 import { useAuth } from '../contexts/AuthContext'
-import { canAttemptDelete } from '../lib/materialInteractions'
 
 const STATUS_STYLES: Record<ProcessingStatus, string> = {
   pending: 'bg-warning-soft text-warning',
@@ -37,13 +36,13 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    const confirmed = confirm('Delete this material and all its content?')
-    if (!canAttemptDelete({ hasUser: Boolean(user), deleting, confirmed })) return
+    if (!user || deleting) return
+    if (!confirm('Delete this material and all its content?')) return
 
     setDeleteError(null)
     setDeleting(true)
 
-    const error = await deleteMaterial(user!.id, material.id, material.storage_path)
+    const error = await deleteMaterial(user.id, material.id, material.storage_path)
     if (error) {
       setDeleteError(error)
       setDeleting(false)

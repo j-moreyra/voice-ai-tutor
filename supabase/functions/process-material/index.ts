@@ -1,13 +1,17 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { buildCorsHeaders, isOriginAllowed, parseAllowedOrigins } from '../_shared/cors.ts'
 import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.39.0'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')!
 
+const ENV_ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173']
-const ALLOWED_ORIGINS = parseAllowedOrigins(Deno.env.get('ALLOWED_ORIGINS'), DEFAULT_ALLOWED_ORIGINS)
+const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...ENV_ALLOWED_ORIGINS])]
 
 const STRUCTURING_PROMPT = `You are a curriculum structuring assistant. Analyze the following text extracted from a study material and produce a structured JSON study plan.
 
@@ -75,12 +79,26 @@ interface StructuredPlan {
   chapters: StructuredChapter[]
 }
 
+function buildCorsHeaders(origin: string | null): Record<string, string> {
+  const allowedOrigin = origin && ALLOWED_ORIGINS.includes(origin)
+    ? origin
+    : ALLOWED_ORIGINS[0]
+
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  }
+
+  if (allowedOrigin) headers['Access-Control-Allow-Origin'] = allowedOrigin
+  return headers
+}
+
 function jsonResponse(body: unknown, status: number, origin: string | null): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      ...buildCorsHeaders(origin, ALLOWED_ORIGINS),
+      ...buildCorsHeaders(origin),
     },
   })
 }
@@ -90,17 +108,12 @@ Deno.serve(async (req) => {
 
   if (req.method === 'OPTIONS') {
     return new Response(null, {
-      headers: buildCorsHeaders(origin, ALLOWED_ORIGINS),
+      headers: buildCorsHeaders(origin),
     })
   }
 
-  if (origin && !isOriginAllowed(origin, ALLOWED_ORIGINS)) {
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
     return jsonResponse({ error: 'Origin not allowed' }, 403, origin)
-  }
-
-
-  if (req.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405, origin)
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
