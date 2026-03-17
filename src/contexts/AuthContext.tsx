@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import type { EducationLevel, Profile } from '../types/database'
-import { shouldApplyGetSessionResult } from '../lib/authFlow'
 
 interface AuthContextType {
   user: User | null
@@ -72,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Then check for existing session
     void supabase.auth.getSession().then(({ data: { session } }) => {
       // Avoid double-initialization if INITIAL_SESSION already fired.
-      if (!shouldApplyGetSessionResult(bootstrappedFromEvent)) return
+      if (bootstrappedFromEvent) return
       applySession(session)
     })
 

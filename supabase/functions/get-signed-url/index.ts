@@ -1,13 +1,17 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { buildCorsHeaders, isOriginAllowed, parseAllowedOrigins } from '../_shared/cors.ts'
 
 const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY')!
 const ELEVENLABS_AGENT_ID = Deno.env.get('ELEVENLABS_AGENT_ID')!
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
+const ENV_ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173']
-const ALLOWED_ORIGINS = parseAllowedOrigins(Deno.env.get('ALLOWED_ORIGINS'), DEFAULT_ALLOWED_ORIGINS)
+const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...ENV_ALLOWED_ORIGINS])]
 
 interface Concept {
   id: string
@@ -20,6 +24,20 @@ interface Concept {
 interface MasteryRow {
   concept_id: string
   status: string
+}
+
+function buildCorsHeaders(origin: string | null): Record<string, string> {
+  const allowedOrigin = origin && ALLOWED_ORIGINS.includes(origin)
+    ? origin
+    : ALLOWED_ORIGINS[0]
+
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  }
+
+  if (allowedOrigin) headers['Access-Control-Allow-Origin'] = allowedOrigin
+  return headers
 }
 
 function jsonResponse(body: unknown, status: number, origin: string | null): Response {
@@ -39,7 +57,7 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: buildCorsHeaders(origin) })
   }
 
-  if (origin && !isOriginAllowed(origin, ALLOWED_ORIGINS)) {
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
     return jsonResponse({ error: 'Origin not allowed' }, 403, origin)
   }
 
