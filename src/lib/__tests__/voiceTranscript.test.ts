@@ -13,26 +13,6 @@ describe('mergeTranscriptMessage', () => {
     expect(result).toEqual([{ id: 'tentative-user', role: 'user', text: 'hello', tentative: true }])
   })
 
-  
-  it('streams tentative delta chunks word-by-word', () => {
-    const first = mergeTranscriptMessage([], { role: 'agent', source: 'ai', message: 'Hello' })
-    const second = mergeTranscriptMessage(first, { role: 'agent', source: 'ai', message: 'there' })
-    const third = mergeTranscriptMessage(second, { role: 'agent', source: 'ai', message: 'student' })
-
-    expect(third).toEqual([
-      { id: 'tentative-agent', role: 'agent', text: 'Hello there student', tentative: true },
-    ])
-  })
-
-  it('replaces tentative snapshots when incoming text is full-so-far', () => {
-    const first = mergeTranscriptMessage([], { role: 'agent', source: 'ai', message: 'Hello' })
-    const second = mergeTranscriptMessage(first, { role: 'agent', source: 'ai', message: 'Hello there' })
-
-    expect(second).toEqual([
-      { id: 'tentative-agent', role: 'agent', text: 'Hello there', tentative: true },
-    ])
-  })
-
   it('upgrades tentative message to final when event_id arrives', () => {
     const prev: TranscriptMessage[] = [{ id: 'tentative-agent', role: 'agent', text: 'working', tentative: true }]
     const result = mergeTranscriptMessage(prev, { role: 'agent', source: 'ai', message: 'done', event_id: 10 })

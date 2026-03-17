@@ -4,11 +4,7 @@ export function parseAllowedOrigins(envValue: string | null | undefined, default
     .map((o) => o.trim())
     .filter(Boolean)
 
-  if (fromEnv.length > 0) {
-    return [...new Set(fromEnv)]
-  }
-
-  return [...new Set(defaults)]
+  return [...new Set([...defaults, ...fromEnv])]
 }
 
 export function isOriginAllowed(origin: string | null, allowedOrigins: string[]): boolean {
@@ -16,14 +12,15 @@ export function isOriginAllowed(origin: string | null, allowedOrigins: string[])
 }
 
 export function buildCorsHeaders(origin: string | null, allowedOrigins: string[]): Record<string, string> {
+  const allowedOrigin = isOriginAllowed(origin, allowedOrigins)
+    ? origin!
+    : allowedOrigins[0]
+
   const headers: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
   }
 
-  if (origin && isOriginAllowed(origin, allowedOrigins)) {
-    headers['Access-Control-Allow-Origin'] = origin
-  }
-
+  if (allowedOrigin) headers['Access-Control-Allow-Origin'] = allowedOrigin
   return headers
 }

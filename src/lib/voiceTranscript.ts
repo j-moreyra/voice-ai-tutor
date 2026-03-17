@@ -7,29 +7,12 @@ export type TranscriptMessage = {
   tentative: boolean
 }
 
-function mergeTentativeText(previousText: string, incomingText: string): string {
-  if (!previousText) return incomingText
-
-  const prev = previousText
-  const incoming = incomingText
-
-  // Many APIs stream tentative text as full "text so far" snapshots.
-  if (incoming.startsWith(prev) || prev.startsWith(incoming)) {
-    return incoming
-  }
-
-  // Some APIs stream as token/delta chunks. Append while preserving natural spacing.
-  const needsSpace = !prev.endsWith(' ') && !incoming.startsWith(' ')
-  return `${prev}${needsSpace ? ' ' : ''}${incoming}`
-}
-
 export function mergeTranscriptMessage(
   previous: TranscriptMessage[],
   payload: MessagePayload
 ): TranscriptMessage[] {
-  const rawText = payload.message ?? ''
-  if (!rawText.trim()) return previous
-  const text = rawText
+  const text = payload.message?.trim()
+  if (!text) return previous
 
   const role = payload.role
   const isTentative = payload.event_id == null
@@ -45,8 +28,7 @@ export function mergeTranscriptMessage(
   if (isTentative) {
     const tentativeIdx = findLastTentativeIdx(role)
     if (tentativeIdx >= 0) {
-      const mergedText = mergeTentativeText(next[tentativeIdx].text, text)
-      next[tentativeIdx] = { ...next[tentativeIdx], text: mergedText }
+      next[tentativeIdx] = { ...next[tentativeIdx], text }
     } else {
       next.push({ id: `tentative-${role}`, role, text, tentative: true })
     }
