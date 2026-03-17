@@ -6,10 +6,16 @@ import { createSessionToolHandler } from '../lib/sessionTools'
 import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
+import type { MessagePayload } from '@elevenlabs/types'
+import {
+  mergeTranscriptMessage,
+  parseTentativeAgentDebugMessage,
+  getNextStreamingTentativeText,
+} from '../lib/voiceTranscript'
+import type { TranscriptMessage } from '../lib/voiceTranscript'
 
 type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
-
 export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
@@ -25,6 +31,7 @@ export default function VoiceSession() {
   const [mode, setMode] = useState<Mode>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
+  const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
 
   const navigate = useNavigate()
   const conversationRef = useRef<Conversation | null>(null)
@@ -44,10 +51,91 @@ export default function VoiceSession() {
   // as real disconnects.
   const visibilityHiddenRef = useRef(false)
   const lastHiddenAtRef = useRef<number>(0)
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [transcript])
+
+  const agentTentativeTargetRef = useRef<string>('')
+  const agentTentativeCurrentRef = useRef<string>('')
+  const agentTentativeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopAgentTentativeStreaming = useCallback(() => {
+    if (agentTentativeTimerRef.current) {
+      clearInterval(agentTentativeTimerRef.current)
+      agentTentativeTimerRef.current = null
+    }
+    agentTentativeTargetRef.current = ''
+    agentTentativeCurrentRef.current = ''
+  }, [])
+
+  const queueAgentTentativeStreaming = useCallback((text: string) => {
+    const normalizedTarget = text.trim()
+    if (!normalizedTarget) return
+
+    agentTentativeTargetRef.current = normalizedTarget
+
+    if (agentTentativeCurrentRef.current) {
+      const currentAsText = agentTentativeCurrentRef.current.trim()
+      if (currentAsText && !normalizedTarget.startsWith(currentAsText)) {
+        agentTentativeCurrentRef.current = ''
+      }
+    }
+
+    if (agentTentativeTimerRef.current) return
+
+    agentTentativeTimerRef.current = setInterval(() => {
+      const target = agentTentativeTargetRef.current
+      if (!target) {
+        stopAgentTentativeStreaming()
+        return
+      }
+
+      const nextText = getNextStreamingTentativeText(agentTentativeCurrentRef.current, target)
+      if (!nextText) {
+        stopAgentTentativeStreaming()
+        return
+      }
+
+      if (nextText !== agentTentativeCurrentRef.current) {
+        agentTentativeCurrentRef.current = nextText
+        setTranscript((prev) =>
+          mergeTranscriptMessage(prev, { source: 'ai', role: 'agent', message: nextText })
+        )
+      }
+
+      if (nextText === target) {
+        if (agentTentativeTimerRef.current) {
+          clearInterval(agentTentativeTimerRef.current)
+          agentTentativeTimerRef.current = null
+        }
+      }
+    }, 75)
+  }, [stopAgentTentativeStreaming])
+
+  const handleMessage = useCallback((payload: MessagePayload) => {
+    if (payload.role === 'agent' && payload.event_id == null) {
+      queueAgentTentativeStreaming(payload.message)
+      return
+    }
+
+    if (payload.role === 'agent' && payload.event_id != null) {
+      stopAgentTentativeStreaming()
+    }
+
+    setTranscript((prev) => mergeTranscriptMessage(prev, payload))
+  }, [queueAgentTentativeStreaming, stopAgentTentativeStreaming])
+
+  useEffect(() => {
+    return () => {
+      stopAgentTentativeStreaming()
+    }
+  }, [stopAgentTentativeStreaming])
 
   // Track tab visibility so we can distinguish real disconnects from
   // browser-throttled background tab drops.
@@ -98,6 +186,7 @@ export default function VoiceSession() {
         // ignore cleanup errors
       }
 
+      stopAgentTentativeStreaming()
       stopMediaStream()
 
       try {
@@ -111,7 +200,7 @@ export default function VoiceSession() {
       setStatus('ended')
       setMode('ended')
     },
-    [stopMediaStream]
+    [stopMediaStream, stopAgentTentativeStreaming]
   )
 
   const handleBack = useCallback(async () => {
@@ -135,6 +224,10 @@ export default function VoiceSession() {
       ...(speedParam !== 1 ? { overrides: { tts: { speed: speedParam } } } : {}),
       clientTools: {
         update_session_state: toolHandler,
+      },
+      workletPaths: {
+        rawAudioProcessor: '/elevenlabs/rawAudioProcessor.js',
+        audioConcatProcessor: '/elevenlabs/audioConcatProcessor.js',
       },
       onConnect: () => {
         if (!cancelled.current) {
@@ -172,6 +265,7 @@ export default function VoiceSession() {
             : 0
 
           endedRef.current = true
+          stopAgentTentativeStreaming()
           stopMediaStream()
           if (sessionIdRef.current) {
             endSession(sessionIdRef.current, 'disconnected').catch(() => {})
@@ -195,6 +289,11 @@ export default function VoiceSession() {
           const resolved = newMode.mode === 'speaking' ? 'speaking' : 'listening'
           setMode(resolved)
         }
+      },
+      onMessage: handleMessage,
+      onDebug: (payload: unknown) => {
+        const tentativeMessage = parseTentativeAgentDebugMessage(payload)
+        if (tentativeMessage) queueAgentTentativeStreaming(tentativeMessage.message)
       },
       onError: (err: unknown) => {
         console.error('ElevenLabs error:', err)
@@ -276,12 +375,13 @@ export default function VoiceSession() {
         clearTimeout(disconnectTimerRef.current)
         disconnectTimerRef.current = null
       }
+      stopAgentTentativeStreaming()
       stopMediaStream()
       if (conversationRef.current && !endedRef.current) {
         handleEnd('student_departure')
       }
     }
-  }, [user, materialId, speedParam, handleEnd, stopMediaStream])
+  }, [user, materialId, speedParam, handleEnd, stopMediaStream, handleMessage, stopAgentTentativeStreaming])
 
   const setMicEnabled = (enabled: boolean) => {
     if (mediaStreamRef.current) {
@@ -351,8 +451,8 @@ export default function VoiceSession() {
         <div className="w-12" /> {/* Spacer for centering */}
       </header>
 
-      {/* Center: mode indicator */}
-      <main className="flex flex-1 items-center justify-center animate-fade-in">
+      {/* Center: mode indicator + live transcript */}
+      <main className="flex flex-1 flex-col items-center justify-center gap-6 px-5 pb-6 animate-fade-in">
         {status === 'ended' ? (
           <div className="text-center">
             <SessionStatus mode="ended" />
@@ -367,6 +467,42 @@ export default function VoiceSession() {
           <div className="text-center">
             <SessionStatus mode={mode} />
           </div>
+        )}
+
+        {status !== 'ended' && (
+          <section className="w-full max-w-2xl rounded-2xl border border-border bg-surface/70 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-medium text-text-secondary">Live captions</p>
+              <p className="text-xs text-text-muted">Streaming word-by-word</p>
+            </div>
+
+            <div aria-live="polite" aria-atomic="false" className="max-h-64 overflow-y-auto space-y-2 pr-1">
+              {transcript.length === 0 ? (
+                <p className="text-sm text-text-muted">Transcript will appear here once the conversation starts.</p>
+              ) : (
+                transcript.map((msg) => {
+                  const isTutor = msg.role === 'agent'
+                  return (
+                    <div key={msg.id} className={`flex ${isTutor ? 'justify-start' : 'justify-end'}`}>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                          isTutor
+                            ? 'bg-accent-soft text-text'
+                            : 'bg-muted text-text'
+                        } ${msg.tentative ? 'opacity-70 italic' : ''}`}
+                      >
+                        <p className="mb-1 text-[11px] uppercase tracking-wide text-text-muted">
+                          {isTutor ? 'Tutor' : 'Student'}
+                        </p>
+                        <p>{msg.text}</p>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+              <div ref={transcriptEndRef} />
+            </div>
+          </section>
         )}
       </main>
 

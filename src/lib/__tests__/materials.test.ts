@@ -109,6 +109,10 @@ describe('validateFile', () => {
     expect(validateFile(mockFile('data.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 1024))).toBe('Only PDF, DOCX, and PPTX files are accepted.')
   })
 
+  it('rejects mismatched extension and MIME type', () => {
+    expect(validateFile(mockFile('slides.pdf', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 1024))).toBe('Only PDF, DOCX, and PPTX files are accepted.')
+  })
+
   it('accepts files at exactly 50MB', () => {
     expect(validateFile(mockFile('big.pdf', 'application/pdf', 50 * 1024 * 1024))).toBeNull()
   })
