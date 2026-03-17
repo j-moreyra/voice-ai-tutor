@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import type { DragEvent, ChangeEvent } from 'react'
 import { validateFile, uploadMaterial } from '../lib/materials'
 import { useAuth } from '../contexts/AuthContext'
+import { shouldShowUploadError } from '../lib/materialInteractions'
 
 interface FileUploadProps {
   onUploadComplete: () => void
@@ -44,7 +45,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     )
     setStage(null)
 
-    if (uploadError) {
+    if (shouldShowUploadError(uploadError)) {
       setError(uploadError)
     }
   }, [user, onUploadComplete])
