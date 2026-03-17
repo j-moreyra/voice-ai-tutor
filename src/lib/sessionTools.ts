@@ -52,6 +52,33 @@ function emitSessionToolWarnings(sessionId: string, warnings: string[]) {
   )
 }
 
+function emitPositionChanged(sessionId: string, chapterTitle: string, sectionTitle: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent('session-position-changed', {
+      detail: { sessionId, chapterTitle, sectionTitle },
+    })
+  )
+}
+
+async function fetchPositionTitles(
+  chapterId: string,
+  sectionId: string
+): Promise<{ chapterTitle: string; sectionTitle: string } | null> {
+  try {
+    const [chapterRes, sectionRes] = await Promise.all([
+      supabase.from('chapters').select('title').eq('id', chapterId).single(),
+      supabase.from('sections').select('title').eq('id', sectionId).single(),
+    ])
+    if (chapterRes.data && sectionRes.data) {
+      return { chapterTitle: chapterRes.data.title, sectionTitle: sectionRes.data.title }
+    }
+  } catch {
+    // Non-critical — labels just won't update
+  }
+  return null
+}
+
 // Valid mastery transitions enforced by the validate_mastery_transition trigger.
 // If the agent skips a step (e.g. not_started → mastered), we insert the
 // intermediate state first so the trigger doesn't reject the update.
@@ -154,6 +181,8 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
               .eq('id', sessionId),
           warnings
         )
+        const titles = await fetchPositionTitles(position.chapter_id, position.section_id)
+        if (titles) emitPositionChanged(sessionId, titles.chapterTitle, titles.sectionTitle)
       } else if (params.concept_updates?.length) {
         // Auto-update session position from the last concept update so that
         // pause/resume picks up where the student actually is, even if the
@@ -182,6 +211,8 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
                   current_concept_id: lastConceptId,
                 })
                 .eq('id', sessionId)
+              const titles = await fetchPositionTitles(section.chapter_id, concept.section_id)
+              if (titles) emitPositionChanged(sessionId, titles.chapterTitle, titles.sectionTitle)
             }
           }
         } catch (err) {

@@ -23,8 +23,8 @@ export default function VoiceSession() {
   const [searchParams] = useSearchParams()
   const chapterId = searchParams.get('chapterId') ?? undefined
   const sectionId = searchParams.get('sectionId') ?? undefined
-  const chapterName = searchParams.get('chapter') ?? undefined
-  const sectionName = searchParams.get('section') ?? undefined
+  const [chapterName, setChapterName] = useState(searchParams.get('chapter') ?? undefined)
+  const [sectionName, setSectionName] = useState(searchParams.get('section') ?? undefined)
   // Voice speed override (requires TTS overrides enabled in ElevenLabs dashboard:
   // Agent → Settings → Security tab → enable overrides for TTS/Voice settings)
   const speedParam = parseFloat(searchParams.get('speed') ?? '1.0') || 1.0
@@ -58,6 +58,18 @@ export default function VoiceSession() {
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { sessionId, chapterTitle, sectionTitle } = (e as CustomEvent).detail
+      if (sessionId === sessionIdRef.current) {
+        setChapterName(chapterTitle)
+        setSectionName(sectionTitle)
+      }
+    }
+    window.addEventListener('session-position-changed', handler)
+    return () => window.removeEventListener('session-position-changed', handler)
+  }, [])
 
   // Transcript scroll + message handler commented out — feature disabled.
   // useEffect(() => {

@@ -157,7 +157,7 @@ describe('createSessionToolHandler', () => {
     })
     expect(result).toBe('ok')
     const tables = fromCalls.map((c) => c.table).sort()
-    expect(tables).toEqual(['chapter_results', 'mastery_state', 'session_sections_completed', 'sessions'])
+    expect(tables).toEqual(['chapter_results', 'chapters', 'mastery_state', 'sections', 'session_sections_completed', 'sessions'])
   })
 
   it('skips concept_updates when array is empty', async () => {
