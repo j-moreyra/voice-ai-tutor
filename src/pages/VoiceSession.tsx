@@ -7,11 +7,16 @@ import { Conversation } from '@elevenlabs/client'
 import SessionStatus from '../components/SessionStatus'
 import type { EndReason } from '../types/database'
 import type { MessagePayload } from '@elevenlabs/types'
-import { mergeTranscriptMessage, parseTentativeAgentDebugMessage } from '../lib/voiceTranscript'
-import type { TranscriptMessage } from '../lib/voiceTranscript'
 
 type Status = 'initializing' | 'connecting' | 'connected' | 'ended' | 'error'
 type Mode = 'connecting' | 'listening' | 'speaking' | 'ended'
+type TranscriptMessage = {
+  id: string
+  role: 'user' | 'agent'
+  text: string
+  tentative: boolean
+}
+
 export default function VoiceSession() {
   const { materialId } = useParams<{ materialId: string }>()
   const [searchParams] = useSearchParams()
@@ -58,7 +63,48 @@ export default function VoiceSession() {
   }, [transcript])
 
   const handleMessage = useCallback((payload: MessagePayload) => {
-    setTranscript((prev) => mergeTranscriptMessage(prev, payload))
+    const text = payload.message?.trim()
+    if (!text) return
+
+    const role = payload.role
+    const isTentative = payload.event_id == null
+
+    setTranscript((prev) => {
+      const next = [...prev]
+
+      const findLastTentativeIdx = (targetRole: 'user' | 'agent') => {
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === targetRole && next[i].tentative) return i
+        }
+        return -1
+      }
+
+      if (isTentative) {
+        const tentativeIdx = findLastTentativeIdx(role)
+        if (tentativeIdx >= 0) {
+          next[tentativeIdx] = { ...next[tentativeIdx], text }
+        } else {
+          next.push({ id: `tentative-${role}`, role, text, tentative: true })
+        }
+        return next
+      }
+
+      const finalId = `final-${payload.event_id}`
+      const existingFinalIdx = next.findIndex((m) => m.id === finalId)
+      if (existingFinalIdx >= 0) {
+        next[existingFinalIdx] = { id: finalId, role, text, tentative: false }
+        return next
+      }
+
+      const tentativeIdx = findLastTentativeIdx(role)
+      if (tentativeIdx >= 0) {
+        next[tentativeIdx] = { id: finalId, role, text, tentative: false }
+      } else {
+        next.push({ id: finalId, role, text, tentative: false })
+      }
+
+      return next
+    })
   }, [])
 
   // Track tab visibility so we can distinguish real disconnects from
@@ -213,10 +259,6 @@ export default function VoiceSession() {
         }
       },
       onMessage: handleMessage,
-      onDebug: (payload: unknown) => {
-        const tentativeMessage = parseTentativeAgentDebugMessage(payload)
-        if (tentativeMessage) handleMessage(tentativeMessage)
-      },
       onError: (err: unknown) => {
         console.error('ElevenLabs error:', err)
         if (!cancelled.current && !endedRef.current) {
@@ -393,11 +435,11 @@ export default function VoiceSession() {
         {status !== 'ended' && (
           <section className="w-full max-w-2xl rounded-2xl border border-border bg-surface/70 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-medium text-text-secondary">Live captions</p>
-              <p className="text-xs text-text-muted">Streaming word-by-word</p>
+              <p className="text-sm font-medium text-text-secondary">Live transcript</p>
+              <p className="text-xs text-text-muted">Auto-updating</p>
             </div>
 
-            <div aria-live="polite" aria-atomic="false" className="max-h-64 overflow-y-auto space-y-2 pr-1">
+            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
               {transcript.length === 0 ? (
                 <p className="text-sm text-text-muted">Transcript will appear here once the conversation starts.</p>
               ) : (

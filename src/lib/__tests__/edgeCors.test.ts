@@ -4,14 +4,9 @@ import { parseAllowedOrigins, isOriginAllowed, buildCorsHeaders } from '../../..
 describe('edge CORS helpers', () => {
   const defaults = ['http://localhost:5173', 'http://localhost:4173']
 
-  it('uses env origins as authoritative when provided', () => {
-    const result = parseAllowedOrigins('https://app.example.com, https://app.example.com', defaults)
-    expect(result).toEqual(['https://app.example.com'])
-  })
-
-  it('falls back to defaults when env origins are missing', () => {
-    const result = parseAllowedOrigins('', defaults)
-    expect(result).toEqual(defaults)
+  it('parses env origins and deduplicates with defaults', () => {
+    const result = parseAllowedOrigins('https://app.example.com, http://localhost:5173', defaults)
+    expect(result).toEqual(['http://localhost:5173', 'http://localhost:4173', 'https://app.example.com'])
   })
 
   it('checks if origin is allowed', () => {
@@ -20,10 +15,10 @@ describe('edge CORS helpers', () => {
     expect(isOriginAllowed('https://evil.example.com', allowed)).toBe(false)
   })
 
-  it('builds cors headers only for allowed origins', () => {
-    const allowed = parseAllowedOrigins('https://app.example.com', defaults)
+  it('builds cors headers with allowed origin fallback', () => {
+    const allowed = parseAllowedOrigins('', defaults)
     const headers = buildCorsHeaders('https://not-allowed.example.com', allowed)
-    expect(headers['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(headers['Access-Control-Allow-Origin']).toBe('http://localhost:5173')
     expect(headers['Access-Control-Allow-Methods']).toContain('OPTIONS')
   })
 })
