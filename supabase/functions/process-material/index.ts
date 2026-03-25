@@ -13,47 +13,49 @@ const ENV_ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173']
 const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...ENV_ALLOWED_ORIGINS])]
 
-const STRUCTURING_PROMPT = `You are a curriculum structuring assistant. Analyze the following text extracted from a study material and produce a structured JSON study plan.
-
-Rules:
-- Create logical chapters based on major topics or existing chapter/section headings
-- Each chapter should have 2-5 sections
-- Each section should have 2-8 concepts (individual teachable units)
-- For each concept, extract key_facts: important definitions, formulas, relationships, or facts
-- If the text contains questions (homework, review, exam questions), extract them as professor_questions
-- Preserve the natural ordering of the material
-- Keep titles concise but descriptive
-
-Respond with ONLY valid JSON matching this schema:
+const PROCESSING_PROMPT = `You are a material processing engine for an AI tutoring system. Your job is to take raw study material text and decompose it into the most granular possible lesson plan — every individual fact, definition, step, mechanism, classification, and sub-concept as its own discrete entry.
+Analyze the following study material and return a JSON object with this exact structure:
 {
   "chapters": [
     {
-      "title": "Chapter Title",
+      "title": "Chapter title",
       "sort_order": 0,
       "sections": [
         {
-          "title": "Section Title",
+          "title": "Section title",
           "sort_order": 0,
           "concepts": [
             {
-              "title": "Concept Title",
-              "key_facts": "Key facts, definitions, formulas as a text block",
+              "title": "Concept name",
+              "key_facts": "The specific facts, definition, mechanism, or steps for this concept — written in full detail, not summarized",
               "sort_order": 0
             }
           ]
         }
-      ],
-      "questions": [
-        {
-          "question_text": "The question text",
-          "question_type": "recall",
-          "suggested_placement": "section_quiz",
-          "section_title": "Section Title or null if chapter-level"
-        }
       ]
     }
+  ],
+  "professor_questions": [
+    {
+      "question_text": "The original question text",
+      "question_type": "recall | application | synthesis | multiple_choice | true_false | essay",
+      "suggested_placement": "section_quiz | chapter_assessment",
+      "chapter_title": "Which chapter this question belongs to",
+      "section_title": "Which section this question belongs to (if identifiable)"
+    }
   ]
-}`
+}
+EXTRACTION RULES — FOLLOW EXACTLY:
+GRANULARITY: Extract at the most granular level the material presents. If a section lists 5 steps, those are 5 separate concepts. If it defines 4 types of bacteria, those are 4 separate concepts. If a paragraph explains a mechanism with 3 distinct parts, those are 3 separate concepts. Never bundle multiple distinct facts, steps, types, or definitions into a single concept entry.
+CONCEPT SCOPE: Each concept must be a single, atomic unit of knowledge — one definition, one mechanism, one step, one classification, one relationship. If you cannot ask a single focused question about the concept, it is too broad and must be split further.
+KEY FACTS: The key_facts field must contain the full, specific detail from the material — not a summary. Include exact terminology, specific values, numbered steps, named components, and precise relationships exactly as the material presents them. A tutor will read this field aloud — it must be complete enough to teach from without referring back to the original document.
+COVERAGE: Every piece of information in the material must appear in at least one concept's key_facts. Nothing should be omitted, generalized, or left implied. If the material mentions it, it must be in the structured output.
+NO UPPER LIMIT: There is no maximum number of concepts per section. A dense section with 15 distinct points should produce 15 concepts. Do not artificially compress content to fit a target count.
+STRUCTURE: Break material into chapters based on major topic divisions. Each chapter should have 2-6 sections. Sections group related concepts — not limit them.
+ORDER: Sequence concepts from foundational to advanced within each section. Teach prerequisites before the concepts that depend on them.
+TERMINOLOGY: Use the exact same terms as the source material. Do not paraphrase, rename, or substitute synonyms.
+QUESTIONS: Extract any assessment questions, practice problems, review questions, quiz items, multiple choice, true/false, or essay prompts. Tag by type and suggest placement.
+Return ONLY the JSON object. No preamble, no markdown backticks, no explanation.`
 
 interface StructuredChapter {
   title: string
@@ -67,16 +69,17 @@ interface StructuredChapter {
       sort_order: number
     }[]
   }[]
-  questions?: {
-    question_text: string
-    question_type: string | null
-    suggested_placement: string | null
-    section_title: string | null
-  }[]
 }
 
 interface StructuredPlan {
   chapters: StructuredChapter[]
+  professor_questions?: {
+    question_text: string
+    question_type: string | null
+    suggested_placement: string | null
+    chapter_title: string | null
+    section_title: string | null
+  }[]
 }
 
 function buildCorsHeaders(origin: string | null): Record<string, string> {
@@ -162,11 +165,11 @@ Deno.serve(async (req) => {
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
+      max_tokens: 16000,
       messages: [
         {
           role: 'user',
-          content: `${STRUCTURING_PROMPT}\n\n---\n\nHere is the extracted text:\n\n${text}`,
+          content: `${PROCESSING_PROMPT}\n\n---\n\nHere is the extracted text:\n\n${text}`,
         },
       ],
     })
@@ -187,6 +190,8 @@ Deno.serve(async (req) => {
       throw new Error('No chapters found in structured plan')
     }
 
+    const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
+
     for (const chapter of plan.chapters) {
       const { data: chapterRow, error: chapterErr } = await supabase
         .from('chapters')
@@ -204,7 +209,7 @@ Deno.serve(async (req) => {
         continue
       }
 
-      const sectionMap = new Map<string, string>()
+      chapterMap.set(chapter.title, { id: chapterRow.id, sectionMap: new Map<string, string>() })
 
       for (const section of chapter.sections) {
         const { data: sectionRow, error: sectionErr } = await supabase
@@ -223,7 +228,7 @@ Deno.serve(async (req) => {
           continue
         }
 
-        sectionMap.set(section.title, sectionRow.id)
+        chapterMap.get(chapter.title)!.sectionMap.set(section.title, sectionRow.id)
 
         if (section.concepts.length) {
           const conceptRows = section.concepts.map((c) => ({
@@ -239,19 +244,23 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (chapter.questions?.length) {
-        const questionRows = chapter.questions.map((q) => ({
-          chapter_id: chapterRow.id,
-          section_id: q.section_title ? sectionMap.get(q.section_title) ?? null : null,
+    }
+
+    if (plan.professor_questions?.length) {
+      const questionRows = plan.professor_questions.map((q) => {
+        const chapterEntry = q.chapter_title ? chapterMap.get(q.chapter_title) : undefined
+        return {
+          chapter_id: chapterEntry?.id ?? null,
+          section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
           user_id: user.id,
           question_text: q.question_text,
           question_type: q.question_type,
           suggested_placement: q.suggested_placement,
-        }))
+        }
+      })
 
-        const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
-        if (qErr) console.error('Failed to insert questions:', qErr)
-      }
+      const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
+      if (qErr) console.error('Failed to insert questions:', qErr)
     }
 
     await supabase
