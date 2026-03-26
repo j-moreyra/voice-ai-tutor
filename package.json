@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@elevenlabs/client": "^0.15.0",
+    "@elevenlabs/client": "^0.16.0",
     "@supabase/supabase-js": "^2.49.1",
     "jszip": "^3.10.1",
     "mammoth": "^1.11.0",
