@@ -150,6 +150,18 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Material not found' }, 404, origin)
   }
 
+  // Rate limit: max 10 materials processed per user per hour
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const { count: recentCount } = await supabase
+    .from('materials')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .gte('created_at', oneHourAgo)
+
+  if (recentCount != null && recentCount >= 10) {
+    return jsonResponse({ error: 'Rate limit exceeded. Please wait before uploading more materials.' }, 429, origin)
+  }
+
   await supabase
     .from('materials')
     .update({ processing_status: 'processing' })
@@ -280,6 +292,6 @@ Deno.serve(async (req) => {
       })
       .eq('id', material_id)
 
-    return jsonResponse({ error: (err as Error).message }, 500, origin)
+    return jsonResponse({ error: 'An internal error occurred while processing the material' }, 500, origin)
   }
 })

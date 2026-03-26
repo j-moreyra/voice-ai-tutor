@@ -133,21 +133,27 @@ export interface MaterialStructure {
 }
 
 export async function fetchMaterialStructure(materialId: string): Promise<MaterialStructure> {
-  const [chaptersRes, sectionsRes, conceptsRes] = await Promise.all([
-    supabase.from('chapters').select('*').eq('material_id', materialId).order('sort_order'),
-    supabase.from('sections').select('*').order('sort_order'),
-    supabase.from('concepts').select('*').order('sort_order'),
-  ])
+  const chaptersRes = await supabase
+    .from('chapters')
+    .select('*')
+    .eq('material_id', materialId)
+    .order('sort_order')
 
   const chapters = (chaptersRes.data as Chapter[]) ?? []
-  const allSections = (sectionsRes.data as Section[]) ?? []
-  const allConcepts = (conceptsRes.data as Concept[]) ?? []
+  const chapterIds = chapters.map((c) => c.id)
 
-  const chapterIds = new Set(chapters.map((c) => c.id))
+  const sectionsRes = chapterIds.length
+    ? await supabase.from('sections').select('*').in('chapter_id', chapterIds).order('sort_order')
+    : { data: [] }
 
-  const sections = allSections.filter((s) => chapterIds.has(s.chapter_id))
-  const sectionIds = new Set(sections.map((s) => s.id))
-  const concepts = allConcepts.filter((c) => sectionIds.has(c.section_id))
+  const sections = (sectionsRes.data as Section[]) ?? []
+  const sectionIds = sections.map((s) => s.id)
+
+  const conceptsRes = sectionIds.length
+    ? await supabase.from('concepts').select('*').in('section_id', sectionIds).order('sort_order')
+    : { data: [] }
+
+  const concepts = (conceptsRes.data as Concept[]) ?? []
 
   return {
     chapters: chapters.map((chapter) => ({

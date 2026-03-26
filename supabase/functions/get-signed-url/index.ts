@@ -108,6 +108,18 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'Forbidden' }, 403, origin)
     }
 
+    // Rate limit: max 20 voice sessions per user per hour
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const { count: recentSessions } = await supabase
+      .from('sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .gte('started_at', oneHourAgo)
+
+    if (recentSessions != null && recentSessions >= 20) {
+      return jsonResponse({ error: 'Rate limit exceeded. Please wait before starting more sessions.' }, 429, origin)
+    }
+
     const materialText = material.extracted_text ?? ''
     const chapters = chaptersRes.data ?? []
     const chapterIds = chapters.map((c: { id: string }) => c.id)
@@ -268,12 +280,14 @@ Deno.serve(async (req) => {
 
     if (!elevenLabsRes.ok) {
       const errorText = await elevenLabsRes.text()
-      return jsonResponse({ error: `ElevenLabs API error: ${errorText}` }, 502, origin)
+      console.error('ElevenLabs API error:', errorText)
+      return jsonResponse({ error: 'Voice service is temporarily unavailable' }, 502, origin)
     }
 
     const { signed_url } = await elevenLabsRes.json()
     return jsonResponse({ signed_url, dynamic_variables: dynamicVariables }, 200, origin)
   } catch (err) {
-    return jsonResponse({ error: (err as Error).message }, 500, origin)
+    console.error('get-signed-url error:', err)
+    return jsonResponse({ error: 'An internal error occurred' }, 500, origin)
   }
 })
