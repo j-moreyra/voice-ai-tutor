@@ -98,7 +98,12 @@ export async function uploadMaterial(
 
   // 5. Send extracted text to Edge Function for structuring.
   //    Don't await — the Dashboard polls for status updates.
+  onProgress?.('processing')
   const { data: { session } } = await supabase.auth.getSession()
+  console.log('[uploadMaterial] Invoking process-material edge function', {
+    material_id: (material as Material).id,
+    hasToken: !!session?.access_token,
+  })
   supabase.functions.invoke('process-material', {
     body: {
       material_id: (material as Material).id,
@@ -107,8 +112,14 @@ export async function uploadMaterial(
     headers: {
       Authorization: `Bearer ${session?.access_token}`,
     },
+  }).then((result) => {
+    if (result.error) {
+      console.error('[uploadMaterial] process-material returned error:', result.error)
+    } else {
+      console.log('[uploadMaterial] process-material invoked successfully')
+    }
   }).catch((err) => {
-    console.error('Background processing failed (non-fatal):', err)
+    console.error('[uploadMaterial] process-material network/invocation failed:', err)
   })
 
   return { error: null }

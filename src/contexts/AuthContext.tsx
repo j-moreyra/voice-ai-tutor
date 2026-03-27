@@ -68,9 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applySession(session)
     })
 
-    // Then check for existing session
+    // Fallback: check for existing session via getSession().
+    // Security note: getSession() reads the JWT from local storage without
+    // server-side re-validation, so a tampered token could temporarily set
+    // client-side auth state. This is acceptable here because:
+    //   1. onAuthStateChange (above) fires first in most cases and validates
+    //      via Supabase's refresh mechanism.
+    //   2. All server-side operations (edge functions) call getUser(token)
+    //      which rejects tampered tokens.
+    //   3. This fallback only runs if INITIAL_SESSION hasn't fired yet.
     void supabase.auth.getSession().then(({ data: { session } }) => {
-      // Avoid double-initialization if INITIAL_SESSION already fired.
       if (bootstrappedFromEvent) return
       applySession(session)
     })
