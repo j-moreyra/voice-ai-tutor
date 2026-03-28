@@ -11,7 +11,7 @@ const ALLOWED_ORIGINS = [
   'https://voice-ai-tutor.netlify.app',
 ]
 
-const CHUNK_SIZE = 12_000
+const CHUNK_SIZE = 8_000
 const OVERLAP_SIZE = 500
 const MAX_TOTAL_CHARS = 400_000
 
@@ -128,7 +128,7 @@ async function processChunk(
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [
       {
         role: 'user',
