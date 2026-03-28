@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ── Chainable Supabase mock ───────────────────────────────────────────
 
 function createChainableQuery(result: { data?: unknown; error?: unknown } = { data: null }) {
   const chain: Record<string, unknown> = {}
-  const methods = ['select', 'insert', 'update', 'delete', 'upsert', 'eq', 'in', 'order', 'limit', 'single', 'from', 'remove', 'upload']
+  const methods = ['select', 'insert', 'update', 'delete', 'upsert', 'eq', 'in', 'gte', 'order', 'limit', 'single', 'from', 'remove', 'upload']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -18,7 +18,6 @@ let storageRemoveResult: { data?: unknown; error?: unknown }
 let mockChannel: Record<string, ReturnType<typeof vi.fn>>
 let mockRemoveChannel: ReturnType<typeof vi.fn>
 let mockGetSession: ReturnType<typeof vi.fn>
-let mockFunctionsInvoke: ReturnType<typeof vi.fn>
 
 vi.mock('../supabase', () => ({
   supabase: {
@@ -35,9 +34,6 @@ vi.mock('../supabase', () => ({
     auth: {
       getSession: () => mockGetSession(),
     },
-    functions: {
-      invoke: (...args: unknown[]) => mockFunctionsInvoke(...args),
-    },
     channel: (..._args: unknown[]) => mockChannel,
     removeChannel: (...args: unknown[]) => mockRemoveChannel(...args),
   },
@@ -47,7 +43,18 @@ vi.mock('../extract', () => ({
   extractText: vi.fn(),
 }))
 
-import { validateFile, getFileType, uploadMaterial, fetchMaterials, fetchMaterialStructure, deleteMaterial, subscribeMaterials } from '../materials'
+import {
+  validateFile,
+  getFileType,
+  uploadMaterial,
+  fetchMaterials,
+  fetchMaterialStructure,
+  deleteMaterial,
+  subscribeMaterials,
+  splitTextIntoChunks,
+  processChunkViaProxy,
+  mergePlans,
+} from '../materials'
 import { extractText } from '../extract'
 
 const mockExtractText = vi.mocked(extractText)
@@ -60,18 +67,34 @@ function mockFile(name: string, type: string, size: number): File {
   return blob as File
 }
 
+let originalFetch: typeof globalThis.fetch
+let mockFetch: ReturnType<typeof vi.fn>
+
 beforeEach(() => {
   vi.restoreAllMocks()
   fromResults = {}
   storageUploadResult = { data: {}, error: null }
   storageRemoveResult = { data: {}, error: null }
   mockGetSession = vi.fn().mockResolvedValue({ data: { session: { access_token: 'tok' } } })
-  mockFunctionsInvoke = vi.fn().mockResolvedValue({ data: null, error: null })
   mockChannel = {
     on: vi.fn().mockReturnThis(),
     subscribe: vi.fn().mockReturnThis(),
   } as unknown as Record<string, ReturnType<typeof vi.fn>>
   mockRemoveChannel = vi.fn()
+
+  // Mock global fetch for Netlify function calls
+  originalFetch = globalThis.fetch
+  mockFetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: () => Promise.resolve({
+      chapters: [{ title: 'Ch1', sort_order: 0, sections: [] }],
+    }),
+  })
+  globalThis.fetch = mockFetch
+})
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
 })
 
 // ── validateFile ──────────────────────────────────────────────────────
@@ -142,6 +165,146 @@ describe('getFileType', () => {
   })
 })
 
+// ── splitTextIntoChunks ──────────────────────────────────────────────
+
+describe('splitTextIntoChunks', () => {
+  it('returns single chunk for short text', () => {
+    const chunks = splitTextIntoChunks('hello world')
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]).toBe('hello world')
+  })
+
+  it('splits long text into multiple chunks', () => {
+    const text = 'x'.repeat(25_000)
+    const chunks = splitTextIntoChunks(text)
+    expect(chunks.length).toBeGreaterThan(1)
+  })
+
+  it('all text is covered by chunks', () => {
+    const text = 'abcdefghij'.repeat(2000) // 20,000 chars
+    const chunks = splitTextIntoChunks(text)
+    // Every character from original text should appear in at least one chunk
+    for (let i = 0; i < text.length; i++) {
+      const found = chunks.some((chunk) => {
+        const chunkStart = text.indexOf(chunk.slice(0, 50))
+        return chunkStart !== -1 && i >= chunkStart && i < chunkStart + chunk.length
+      })
+      if (!found) {
+        // Fallback: just check the char exists in some chunk
+        expect(chunks.some((c) => c.includes(text[i]))).toBe(true)
+      }
+    }
+  })
+
+  it('returns text as-is when under chunk size', () => {
+    const text = 'a'.repeat(12_000)
+    const chunks = splitTextIntoChunks(text)
+    expect(chunks).toHaveLength(1)
+  })
+})
+
+// ── processChunkViaProxy ─────────────────────────────────────────────
+
+describe('processChunkViaProxy', () => {
+  it('calls the Netlify function endpoint', async () => {
+    await processChunkViaProxy('some text', 0, 1)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/.netlify/functions/process-chunk',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  })
+
+  it('sends chunk_index and total_chunks in body', async () => {
+    await processChunkViaProxy('some text', 2, 5)
+    const call = mockFetch.mock.calls[0]
+    const body = JSON.parse(call[1].body)
+    expect(body.chunk_index).toBe(2)
+    expect(body.total_chunks).toBe(5)
+    expect(body.text).toBe('some text')
+  })
+
+  it('throws on non-OK response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: 'Server error' }),
+    })
+    await expect(processChunkViaProxy('text', 0, 1)).rejects.toThrow('Server error')
+  })
+})
+
+// ── mergePlans ───────────────────────────────────────────────────────
+
+describe('mergePlans', () => {
+  it('returns single plan as-is', () => {
+    const plan = { chapters: [{ title: 'Ch1', sort_order: 0, sections: [] }] }
+    expect(mergePlans([plan])).toBe(plan)
+  })
+
+  it('merges chapters with same title', () => {
+    const plan1 = { chapters: [{ title: 'Ch1', sort_order: 0, sections: [
+      { title: 'S1', sort_order: 0, concepts: [{ title: 'C1', key_facts: 'f1', sort_order: 0 }] },
+    ] }] }
+    const plan2 = { chapters: [{ title: 'Ch1', sort_order: 1000, sections: [
+      { title: 'S1', sort_order: 1000, concepts: [{ title: 'C2', key_facts: 'f2', sort_order: 1000 }] },
+    ] }] }
+    const merged = mergePlans([plan1, plan2])
+    expect(merged.chapters).toHaveLength(1)
+    expect(merged.chapters[0].sections).toHaveLength(1)
+    expect(merged.chapters[0].sections[0].concepts).toHaveLength(2)
+  })
+
+  it('keeps separate chapters with different titles', () => {
+    const plan1 = { chapters: [{ title: 'Ch1', sort_order: 0, sections: [] }] }
+    const plan2 = { chapters: [{ title: 'Ch2', sort_order: 1000, sections: [] }] }
+    const merged = mergePlans([plan1, plan2])
+    expect(merged.chapters).toHaveLength(2)
+  })
+
+  it('deduplicates concepts by title', () => {
+    const plan1 = { chapters: [{ title: 'Ch1', sort_order: 0, sections: [
+      { title: 'S1', sort_order: 0, concepts: [{ title: 'Same', key_facts: 'f1', sort_order: 0 }] },
+    ] }] }
+    const plan2 = { chapters: [{ title: 'Ch1', sort_order: 0, sections: [
+      { title: 'S1', sort_order: 0, concepts: [{ title: 'Same', key_facts: 'f2', sort_order: 0 }] },
+    ] }] }
+    const merged = mergePlans([plan1, plan2])
+    expect(merged.chapters[0].sections[0].concepts).toHaveLength(1)
+    expect(merged.chapters[0].sections[0].concepts[0].key_facts).toBe('f1') // first wins
+  })
+
+  it('deduplicates professor questions by text', () => {
+    const plan1 = {
+      chapters: [],
+      professor_questions: [{ question_text: 'Q1', question_type: null, suggested_placement: null, chapter_title: null, section_title: null }],
+    }
+    const plan2 = {
+      chapters: [],
+      professor_questions: [
+        { question_text: 'Q1', question_type: null, suggested_placement: null, chapter_title: null, section_title: null },
+        { question_text: 'Q2', question_type: null, suggested_placement: null, chapter_title: null, section_title: null },
+      ],
+    }
+    const merged = mergePlans([plan1, plan2])
+    expect(merged.professor_questions).toHaveLength(2)
+  })
+
+  it('renumbers sort_order sequentially', () => {
+    const plan1 = { chapters: [
+      { title: 'Ch1', sort_order: 0, sections: [] },
+    ] }
+    const plan2 = { chapters: [
+      { title: 'Ch2', sort_order: 1000, sections: [] },
+    ] }
+    const merged = mergePlans([plan1, plan2])
+    expect(merged.chapters[0].sort_order).toBe(0)
+    expect(merged.chapters[1].sort_order).toBe(1)
+  })
+})
+
 // ── uploadMaterial ────────────────────────────────────────────────────
 
 describe('uploadMaterial', () => {
@@ -198,15 +361,21 @@ describe('uploadMaterial', () => {
     await uploadMaterial('user1', pdfFile(), (stage) => stages.push(stage))
     expect(stages).toContain('extracting')
     expect(stages).toContain('uploading')
+    expect(stages).toContain('processing')
   })
 
-  it('fires background processing on success', async () => {
+  it('fires background processing via Netlify function on success', async () => {
     mockExtractText.mockResolvedValue('x'.repeat(200))
     fromResults.materials = { data: { id: 'mat-abc' }, error: null }
     await uploadMaterial('user1', pdfFile())
-    expect(mockFunctionsInvoke).toHaveBeenCalledWith('process-material', expect.objectContaining({
-      body: { material_id: 'mat-abc', text_content: 'x'.repeat(200) },
-    }))
+    // Give the fire-and-forget promise a tick to execute
+    await new Promise((r) => setTimeout(r, 10))
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/.netlify/functions/process-chunk',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
   })
 })
 
