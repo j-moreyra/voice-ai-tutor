@@ -10,12 +10,90 @@ const ACCEPTED_TYPES: Record<string, FileType> = {
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB
 
+const CHUNK_SIZE = 12_000
+const OVERLAP_SIZE = 500
+const MAX_TOTAL_CHARS = 400_000
 
 const ACCEPTED_EXTENSIONS: Record<string, FileType> = {
   '.pdf': 'pdf',
   '.docx': 'docx',
   '.pptx': 'pptx',
 }
+
+const PROCESSING_PROMPT = `You are a material processing engine for an AI tutoring system. Your job is to take raw study material text and decompose it into the most granular possible lesson plan — every individual fact, definition, step, mechanism, classification, and sub-concept as its own discrete entry.
+Analyze the following study material and return a JSON object with this exact structure:
+{
+  "chapters": [
+    {
+      "title": "Chapter title",
+      "sort_order": 0,
+      "sections": [
+        {
+          "title": "Section title",
+          "sort_order": 0,
+          "concepts": [
+            {
+              "title": "Concept name",
+              "key_facts": "The specific facts, definition, mechanism, or steps for this concept — written in full detail, not summarized",
+              "sort_order": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "professor_questions": [
+    {
+      "question_text": "The original question text",
+      "question_type": "recall | application | synthesis | multiple_choice | true_false | essay",
+      "suggested_placement": "section_quiz | chapter_assessment",
+      "chapter_title": "Which chapter this question belongs to",
+      "section_title": "Which section this question belongs to (if identifiable)"
+    }
+  ]
+}
+EXTRACTION RULES — FOLLOW EXACTLY:
+GRANULARITY: Extract at the most granular level the material presents. If a section lists 5 steps, those are 5 separate concepts. If it defines 4 types of bacteria, those are 4 separate concepts. If a paragraph explains a mechanism with 3 distinct parts, those are 3 separate concepts. Never bundle multiple distinct facts, steps, types, or definitions into a single concept entry.
+CONCEPT SCOPE: Each concept must be a single, atomic unit of knowledge — one definition, one mechanism, one step, one classification, one relationship. If you cannot ask a single focused question about the concept, it is too broad and must be split further.
+KEY FACTS: The key_facts field must contain the full, specific detail from the material — not a summary. Include exact terminology, specific values, numbered steps, named components, and precise relationships exactly as the material presents them. A tutor will read this field aloud — it must be complete enough to teach from without referring back to the original document.
+COVERAGE: Every piece of information in the material must appear in at least one concept's key_facts. Nothing should be omitted, generalized, or left implied. If the material mentions it, it must be in the structured output.
+NO UPPER LIMIT: There is no maximum number of concepts per section. A dense section with 15 distinct points should produce 15 concepts. Do not artificially compress content to fit a target count.
+STRUCTURE: Break material into chapters based on major topic divisions. Each chapter should have 2-6 sections. Sections group related concepts — not limit them.
+ORDER: Sequence concepts from foundational to advanced within each section. Teach prerequisites before the concepts that depend on them.
+TERMINOLOGY: Use the exact same terms as the source material. Do not paraphrase, rename, or substitute synonyms.
+QUESTIONS: Extract any assessment questions, practice problems, review questions, quiz items, multiple choice, true/false, or essay prompts. Tag by type and suggest placement.
+Return ONLY the JSON object. No preamble, no markdown backticks, no explanation.`
+
+// ── Types for structured plans ───────────────────────────────────────
+
+interface StructuredChapter {
+  title: string
+  sort_order: number
+  sections: {
+    title: string
+    sort_order: number
+    concepts: {
+      title: string
+      key_facts: string | null
+      sort_order: number
+    }[]
+  }[]
+}
+
+interface ProfessorQuestion {
+  question_text: string
+  question_type: string | null
+  suggested_placement: string | null
+  chapter_title: string | null
+  section_title: string | null
+}
+
+interface StructuredPlan {
+  chapters: StructuredChapter[]
+  professor_questions?: ProfessorQuestion[]
+}
+
+// ── Chunking helpers ─────────────────────────────────────────────────
 
 function getExtension(fileName: string): string {
   const dotIndex = fileName.lastIndexOf('.')
@@ -38,6 +116,233 @@ export function validateFile(file: File): string | null {
 export function getFileType(file: File): FileType {
   return ACCEPTED_TYPES[file.type]!
 }
+
+/**
+ * Split text into chunks of up to CHUNK_SIZE characters, breaking at paragraph
+ * boundaries when possible. Each chunk (after the first) is prefixed with
+ * OVERLAP_SIZE characters from the end of the previous chunk for context.
+ */
+export function splitTextIntoChunks(text: string): string[] {
+  if (text.length <= CHUNK_SIZE) return [text]
+
+  const chunks: string[] = []
+  let offset = 0
+
+  while (offset < text.length) {
+    let end = Math.min(offset + CHUNK_SIZE, text.length)
+
+    // Try to break at a paragraph boundary within the last 20% of the chunk
+    if (end < text.length) {
+      const searchStart = offset + Math.floor(CHUNK_SIZE * 0.8)
+      const breakZone = text.slice(searchStart, end)
+      const lastParagraph = breakZone.lastIndexOf('\n\n')
+      if (lastParagraph !== -1) {
+        end = searchStart + lastParagraph + 2
+      }
+    }
+
+    chunks.push(text.slice(offset, end))
+
+    offset = Math.max(end - OVERLAP_SIZE, offset + 1)
+    if (end >= text.length) break
+  }
+
+  return chunks
+}
+
+/**
+ * Call the Netlify serverless function to process a single chunk via the
+ * Anthropic API. The API key stays server-side.
+ */
+export async function processChunkViaProxy(
+  chunkText: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<StructuredPlan> {
+  const res = await fetch('/.netlify/functions/process-chunk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: chunkText,
+      prompt: PROCESSING_PROMPT,
+      chunk_index: chunkIndex,
+      total_chunks: totalChunks,
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(body.error ?? `Chunk ${chunkIndex + 1} failed with status ${res.status}`)
+  }
+
+  return res.json()
+}
+
+/**
+ * Merge multiple StructuredPlan results into one. Chapters and sections with
+ * identical titles are combined; concepts are deduplicated by title within
+ * each section. Sort orders are renumbered sequentially.
+ */
+export function mergePlans(plans: StructuredPlan[]): StructuredPlan {
+  if (plans.length === 1) return plans[0]
+
+  const chapterMap = new Map<string, {
+    title: string
+    sectionMap: Map<string, {
+      title: string
+      conceptMap: Map<string, { title: string; key_facts: string | null }>
+    }>
+  }>()
+
+  const allQuestions: ProfessorQuestion[] = []
+  const chapterOrder: string[] = []
+
+  for (const plan of plans) {
+    for (const chapter of (plan.chapters ?? [])) {
+      if (!chapterMap.has(chapter.title)) {
+        chapterMap.set(chapter.title, {
+          title: chapter.title,
+          sectionMap: new Map(),
+        })
+        chapterOrder.push(chapter.title)
+      }
+      const entry = chapterMap.get(chapter.title)!
+
+      for (const section of chapter.sections) {
+        if (!entry.sectionMap.has(section.title)) {
+          entry.sectionMap.set(section.title, {
+            title: section.title,
+            conceptMap: new Map(),
+          })
+        }
+        const sectionEntry = entry.sectionMap.get(section.title)!
+
+        for (const concept of section.concepts) {
+          if (!sectionEntry.conceptMap.has(concept.title)) {
+            sectionEntry.conceptMap.set(concept.title, {
+              title: concept.title,
+              key_facts: concept.key_facts,
+            })
+          }
+        }
+      }
+    }
+
+    if (plan.professor_questions?.length) {
+      allQuestions.push(...plan.professor_questions)
+    }
+  }
+
+  const chapters: StructuredChapter[] = []
+  let chapterIdx = 0
+  for (const chapterTitle of chapterOrder) {
+    const entry = chapterMap.get(chapterTitle)!
+    const sections: StructuredChapter['sections'] = []
+    let sectionIdx = 0
+    for (const [, sectionEntry] of entry.sectionMap) {
+      const concepts: StructuredChapter['sections'][0]['concepts'] = []
+      let conceptIdx = 0
+      for (const [, concept] of sectionEntry.conceptMap) {
+        concepts.push({ title: concept.title, key_facts: concept.key_facts, sort_order: conceptIdx++ })
+      }
+      sections.push({ title: sectionEntry.title, sort_order: sectionIdx++, concepts })
+    }
+    chapters.push({ title: entry.title, sort_order: chapterIdx++, sections })
+  }
+
+  const seenQuestions = new Set<string>()
+  const uniqueQuestions = allQuestions.filter((q) => {
+    if (seenQuestions.has(q.question_text)) return false
+    seenQuestions.add(q.question_text)
+    return true
+  })
+
+  return { chapters, professor_questions: uniqueQuestions.length ? uniqueQuestions : undefined }
+}
+
+/**
+ * Write a merged StructuredPlan to Supabase (chapters, sections, concepts,
+ * professor_questions).
+ */
+async function writePlanToSupabase(
+  plan: StructuredPlan,
+  materialId: string,
+  userId: string,
+): Promise<void> {
+  const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
+
+  for (const chapter of plan.chapters) {
+    const { data: chapterRow, error: chapterErr } = await supabase
+      .from('chapters')
+      .insert({
+        material_id: materialId,
+        user_id: userId,
+        title: chapter.title,
+        sort_order: chapter.sort_order,
+      })
+      .select('id')
+      .single()
+
+    if (chapterErr || !chapterRow) {
+      console.error('Failed to insert chapter:', chapterErr)
+      continue
+    }
+
+    chapterMap.set(chapter.title, { id: (chapterRow as { id: string }).id, sectionMap: new Map() })
+
+    for (const section of chapter.sections) {
+      const { data: sectionRow, error: sectionErr } = await supabase
+        .from('sections')
+        .insert({
+          chapter_id: (chapterRow as { id: string }).id,
+          user_id: userId,
+          title: section.title,
+          sort_order: section.sort_order,
+        })
+        .select('id')
+        .single()
+
+      if (sectionErr || !sectionRow) {
+        console.error('Failed to insert section:', sectionErr)
+        continue
+      }
+
+      chapterMap.get(chapter.title)!.sectionMap.set(section.title, (sectionRow as { id: string }).id)
+
+      if (section.concepts.length) {
+        const conceptRows = section.concepts.map((c) => ({
+          section_id: (sectionRow as { id: string }).id,
+          user_id: userId,
+          title: c.title,
+          key_facts: c.key_facts,
+          sort_order: c.sort_order,
+        }))
+
+        const { error: conceptErr } = await supabase.from('concepts').insert(conceptRows)
+        if (conceptErr) console.error('Failed to insert concepts:', conceptErr)
+      }
+    }
+  }
+
+  if (plan.professor_questions?.length) {
+    const questionRows = plan.professor_questions.map((q) => {
+      const chapterEntry = q.chapter_title ? chapterMap.get(q.chapter_title) : undefined
+      return {
+        chapter_id: chapterEntry?.id ?? null,
+        section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
+        user_id: userId,
+        question_text: q.question_text,
+        question_type: q.question_type,
+        suggested_placement: q.suggested_placement,
+      }
+    })
+
+    const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
+    if (qErr) console.error('Failed to insert questions:', qErr)
+  }
+}
+
+// ── Main upload flow ─────────────────────────────────────────────────
 
 export async function uploadMaterial(
   userId: string,
@@ -96,34 +401,76 @@ export async function uploadMaterial(
   // 4. Notify caller so the material card appears immediately
   onMaterialCreated?.()
 
-  // 5. Send extracted text to Edge Function for structuring.
-  //    Don't await — the Dashboard polls for status updates.
+  // 5. Process text via Netlify serverless proxy (chunked)
   onProgress?.('processing')
-  const { data: { session } } = await supabase.auth.getSession()
-  console.log('[uploadMaterial] Invoking process-material edge function', {
-    material_id: (material as Material).id,
-    hasToken: !!session?.access_token,
-  })
-  supabase.functions.invoke('process-material', {
-    body: {
-      material_id: (material as Material).id,
-      text_content: extractedText,
-    },
-    headers: {
-      Authorization: `Bearer ${session?.access_token}`,
-    },
-  }).then((result) => {
-    if (result.error) {
-      console.error('[uploadMaterial] process-material returned error:', result.error)
-    } else {
-      console.log('[uploadMaterial] process-material invoked successfully')
-    }
-  }).catch((err) => {
-    console.error('[uploadMaterial] process-material network/invocation failed:', err)
+  const materialId = (material as Material).id
+
+  // Set status to processing
+  await supabase
+    .from('materials')
+    .update({ processing_status: 'processing' })
+    .eq('id', materialId)
+
+  // Fire-and-forget: process chunks in background so uploadMaterial returns fast
+  processChunkedMaterial(materialId, userId, extractedText).catch((err) => {
+    console.error('[uploadMaterial] Background processing failed:', err)
   })
 
   return { error: null }
 }
+
+/**
+ * Process extracted text through the Netlify proxy in chunks, merge results,
+ * write to Supabase, and update material status.
+ */
+export async function processChunkedMaterial(
+  materialId: string,
+  userId: string,
+  textContent: string,
+): Promise<void> {
+  try {
+    const text = textContent.length > MAX_TOTAL_CHARS
+      ? textContent.slice(0, MAX_TOTAL_CHARS) + '\n\n[Content truncated due to length]'
+      : textContent
+
+    const chunks = splitTextIntoChunks(text)
+    console.log(`[processChunkedMaterial] ${text.length} chars, ${chunks.length} chunk(s)`)
+
+    const chunkResults: StructuredPlan[] = []
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[processChunkedMaterial] Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`)
+      const result = await processChunkViaProxy(chunks[i], i, chunks.length)
+      chunkResults.push(result)
+    }
+
+    const plan = mergePlans(chunkResults)
+
+    if (!plan.chapters?.length) {
+      throw new Error('No chapters found in structured plan')
+    }
+
+    await writePlanToSupabase(plan, materialId, userId)
+
+    await supabase
+      .from('materials')
+      .update({ processing_status: 'completed' })
+      .eq('id', materialId)
+
+    console.log(`[processChunkedMaterial] Material ${materialId} completed`)
+  } catch (err) {
+    console.error('[processChunkedMaterial] Error:', err)
+
+    await supabase
+      .from('materials')
+      .update({
+        processing_status: 'failed',
+        processing_error: (err as Error).message,
+      })
+      .eq('id', materialId)
+  }
+}
+
+// ── Other material operations ────────────────────────────────────────
 
 export async function fetchMaterials(userId: string): Promise<Material[]> {
   const { data } = await supabase
