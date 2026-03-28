@@ -354,13 +354,44 @@ export default async (req: Request, _context: Context) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-    // Validate the auth token
+    // 1. Verify the auth token is valid (401 equivalent)
     const { data: { user }, error: authError } = await supabase.auth.getUser(authToken)
-    if (authError || !user || user.id !== userId) {
-      console.error('Auth validation failed:', authError?.message ?? 'User mismatch')
+    if (authError || !user) {
+      console.error('Auth token invalid:', authError?.message ?? 'No user returned')
       await supabase
         .from('materials')
         .update({ processing_status: 'failed', processing_error: 'Authentication failed' })
+        .eq('id', materialId)
+      return
+    }
+
+    // 2. Confirm the token's user matches the claimed user_id (401 equivalent)
+    if (user.id !== userId) {
+      console.error('Auth user mismatch: token user', user.id, '!= claimed user', userId)
+      await supabase
+        .from('materials')
+        .update({ processing_status: 'failed', processing_error: 'Authentication failed' })
+        .eq('id', materialId)
+      return
+    }
+
+    // 3. Confirm the material belongs to this user (403 equivalent)
+    const { data: material, error: matError } = await supabase
+      .from('materials')
+      .select('id, user_id')
+      .eq('id', materialId)
+      .single()
+
+    if (matError || !material) {
+      console.error('Material not found:', materialId)
+      return
+    }
+
+    if (material.user_id !== user.id) {
+      console.error('Material ownership mismatch: material belongs to', material.user_id, 'not', user.id)
+      await supabase
+        .from('materials')
+        .update({ processing_status: 'failed', processing_error: 'Forbidden' })
         .eq('id', materialId)
       return
     }
