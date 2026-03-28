@@ -4,7 +4,7 @@
 
 **Voice AI Tutor** — a React 18 + TypeScript PWA for AI-powered voice tutoring. Students upload course materials (PDF/DOCX/PPTX), which are processed into structured content (chapters > sections > concepts), then studied via real-time voice sessions powered by ElevenLabs.
 
-**Stack:** React 18 / Vite 6 / Tailwind CSS 4 / Supabase (Auth, DB, Edge Functions, Storage) / ElevenLabs voice / Netlify deploy
+**Stack:** React 18 / Vite 6 / Tailwind CSS 4 / Supabase (Auth, DB, Edge Functions, Storage) / ElevenLabs voice / Netlify (deploy + background functions)
 
 ---
 
@@ -46,43 +46,57 @@ src/
 ├── App.tsx                      Router + HashRedirect + error boundary wrapping
 └── main.tsx                     React entry point
 
+netlify/functions/
+├── process-material-background.mts  Netlify background function (15-min timeout) — chunks text, calls Claude, writes curriculum to DB
+└── process-chunk.ts                 Thin Netlify serverless proxy for per-chunk Anthropic calls (legacy, superseded by background function)
+
 supabase/functions/
 ├── get-signed-url/index.ts      Builds dynamic context → fetches ElevenLabs signed URL
-└── process-material/index.ts    Claude Sonnet 4 → structures text into curriculum
+└── process-material/index.ts    Claude Sonnet 4 → structures text into curriculum (legacy, superseded by background function)
 ```
 
 ---
 
 ## 3. Current Status
 
-**Branch:** `claude/read-handoff-doc-RDhGh`
+**Branch:** `claude/add-mac-notification-hook-cQF2I`
 
 ### Recent work (this branch)
 
 | Area | Changes |
 |------|---------|
-| **Speed slider** | Commented out — ElevenLabs V3 TTS model does not support speed overrides. State, UI, and URL param all commented (not deleted) for future re-enabling |
-| **Pause button** | Removed entirely. Multiple approaches were tried (disconnect/reconnect, contextual updates, setVolume, skip_turn) — all had issues with the AI losing context or restarting from the beginning. The pause button, all pause state/refs, and related UI indicators have been deleted |
-| **Study plan UI** | Concept-level bullets hidden (commented out) — only section headers shown under each chapter. ProgressBar simplified to single accent color showing mastered/total only |
-| **Session header** | VoiceSession now displays chapter and section names in the header. StudyPlan passes these as URL search params (`chapter`, `section`) |
-| **End Session button** | Removed from footer — the Back button in the header already handles session teardown. Only the mute button remains in the footer |
-| **Position tracking** | Edge function now returns two variables: `last_concept_completed` (truly mastered) and `current_concept_in_progress` (concept being taught). Falls back to mastery state when `current_concept_id` is null |
-| **Disconnect resilience** | `determineSessionType` returns `previousPosition` from old sessions on disconnect. New sessions carry forward chapter/section/concept IDs |
-| **Tab-switch handling** | 5-second grace period on disconnect before teardown. `visibilitychange` listener cancels pending teardown when tab becomes visible. useEffect cleanup skipped when `document.hidden` is true |
-| **System prompt** | Added `paused` session type (now unused but harmless). Tightened `disconnected` and `returning` instructions to use `current_concept_in_progress`. All resume types explicitly told not to restart sections |
+| **Material processing → Netlify Background Function** | Migrated from Supabase Edge Function to `netlify/functions/process-material-background.mts`. Background functions get 15-minute timeout (vs 10s regular / 150s edge). Client fires-and-forgets a POST with `{ material_id, text_content, user_id, auth_token }` |
+| **Chunked processing** | Text split into 8K-char chunks with 500-char overlap at paragraph boundaries. Each chunk sent to Claude `claude-sonnet-4-20250514` with `max_tokens: 16000`. Results merged: chapters/sections/concepts deduplicated by title, sort_order renumbered |
+| **Server-side auth** | Background function validates auth token via `supabase.auth.getUser(token)`, confirms `user.id` matches `user_id`, confirms material ownership by querying materials table with service role key. Returns 401/403 on failure |
+| **mastery_state initialization** | Background function creates `not_started` mastery rows for every concept after writing curriculum to DB |
+| **Debug logging** | Extensive `[bg-process]` prefixed `console.log` at every step of background function for diagnosing silent failures |
+| **Security hardening** | Scoped DB queries in `fetchMaterialStructure`, sanitized error messages in edge functions, rate limiting on Claude/ElevenLabs API calls, `sourcemap: false` in Vite config, expanded `.gitignore` for `.env.*` |
+| **CORS fixes** | Added `https://voice-ai-tutor.netlify.app` to allowed origins in both edge functions and the Netlify process-chunk function |
+| **Netlify serverless proxy** | `process-chunk.ts` — thin proxy for per-chunk Anthropic calls (keeps API key server-side). Superseded by background function but still available |
+| **Dependency updates** | `@anthropic-ai/sdk` → `^0.80.0`, `@elevenlabs/client` → `^0.16.0`, `@netlify/functions` → `^5.1.5` added |
+| **Speed slider** | Commented out — ElevenLabs V3 TTS model does not support speed overrides |
+| **Pause button** | Removed entirely after multiple failed approaches |
+| **Study plan UI** | Concept-level bullets hidden; ProgressBar simplified to single accent color |
+| **Session header** | Displays chapter/section names. StudyPlan passes as URL search params |
+| **Position tracking** | `last_concept_completed` vs `current_concept_in_progress` — two-variable system |
+| **Tab-switch handling** | 5-second grace period on disconnect before teardown |
 
 ### Test coverage
 
-**92 tests, 6 files, all passing** (`npm test`)
+**104 tests, 9 files, all passing** (`npm test`)
 
 | File | Tests | Coverage |
 |------|-------|----------|
 | `session.test.ts` | 16 | `determineSessionType` (7 paths), `createSession`, `endSession`, `getSignedUrl` |
-| `materials.test.ts` | 35 | `validateFile`, `getFileType`, `uploadMaterial` (7 scenarios), `fetchMaterials`, `fetchMaterialStructure`, `deleteMaterial`, `subscribeMaterials` |
+| `materials.test.ts` | 36 | `validateFile`, `getFileType`, `uploadMaterial` (incl. background function POST), `fetchMaterials`, `fetchMaterialStructure`, `deleteMaterial`, `subscribeMaterials` |
 | `sessionTools.test.ts` | 9 | All tool handler params, simultaneous ops, error recovery |
 | `study.test.ts` | 12 | `fetchStudyPlan` (hierarchy, mastery mapping, stats), `subscribeStudyPlan` |
 | `extract.test.ts` | 14 | `extractXmlText` (entities, whitespace, nesting), `extractText` dispatch |
 | `database.test.ts` | 6 | `EDUCATION_LEVELS` constant validation |
+| `edgeCors.test.ts` | 3 | CORS origin parsing, validation, header building |
+| `authFlow.test.ts` | 3 | Auth callback timeout, session bootstrapping, session detection |
+| `materialInteractions.test.ts` | 2 | Delete permission logic, upload error display |
+| `voiceTranscript.test.ts` | 1 (skipped) | Transcription feature disabled |
 
 ---
 
@@ -92,9 +106,18 @@ supabase/functions/
 ```
 User drops file → validateFile() → extractText() [client-side PDF/DOCX/PPTX]
   → upload to Supabase Storage → insert materials row → onMaterialCreated callback
-  → fire-and-forget: process-material Edge Function
-    → Claude Sonnet 4 structures text → inserts chapters/sections/concepts/questions
-    → updates material status to 'completed'
+  → set processing_status = 'processing'
+  → fire-and-forget POST to /.netlify/functions/process-material-background
+      Body: { material_id, text_content, user_id, auth_token }
+      Returns 202 immediately
+  → Background function (15-min timeout):
+      → Verify auth token + user ownership
+      → Split text into 8K-char chunks (500-char overlap at paragraph boundaries)
+      → Call Claude Sonnet 4 per chunk (max_tokens: 16000)
+      → Merge chunk results (dedup chapters/sections/concepts by title)
+      → Write chapters → sections → concepts → professor_questions to DB
+      → Initialize mastery_state rows (not_started for every concept)
+      → Update material status to 'completed' or 'failed'
   → Dashboard polls every 3s + realtime subscription for status updates
 ```
 
@@ -140,27 +163,45 @@ onDisconnect fires → record timestamp → start 5s timer
 - **Dark theme** — `#0A0A0F` base, custom CSS properties for all colors.
 - **PWA** — Workbox auto-update, offline-capable, installable.
 - **Supabase RLS** — All tables row-level secured. Edge Functions use service role key.
-- **Fire-and-forget processing** — `uploadMaterial` doesn't await `process-material`. Dashboard polls + realtime subscription picks up status changes.
+- **Fire-and-forget processing** — `uploadMaterial` doesn't await processing. POSTs to Netlify background function, gets 202, dashboard polls + realtime subscription picks up status changes.
+- **Netlify background function over Supabase Edge Function** — Edge Functions have a 150s timeout that was too short for large documents. Netlify background functions get 15 minutes. The migration also solved CORS issues since the function runs on the same origin.
+- **Chunked processing** — Large documents are split into 8K-char chunks with 500-char overlap to stay within Claude's output token limits. Chunk results are merged by deduplicating chapters/sections/concepts by title.
+- **API key server-side only** — Anthropic API key stored as Netlify env var (no `VITE_` prefix). `VITE_` vars are embedded in the JS bundle and would be exposed to users. The background function and process-chunk proxy keep the key server-side.
+- **Sourcemaps disabled** — `build: { sourcemap: false }` in Vite config to prevent exposing source code in production.
 
 ---
 
-## 6. Edge Functions
+## 6. Server Functions
 
-### `get-signed-url`
+### Netlify Background Function: `process-material-background.mts`
+- **Type:** Netlify background function (15-minute timeout). Filename must end in `-background`
+- **Auth:** Three-step — (1) `supabase.auth.getUser(token)` to verify JWT, (2) confirm `user.id === user_id`, (3) query materials table to confirm ownership
+- **Processing:** Claude Sonnet 4 (`claude-sonnet-4-20250514`) with `max_tokens: 16000`
+- **Chunking:** `CHUNK_SIZE = 8000`, `OVERLAP_SIZE = 500`, split at paragraph boundaries. Each chunk includes context about its position (`chunk N of M`) and uses offset sort_order values
+- **Merging:** Chunks merged by deduplicating chapters/sections/concepts by title, then renumbering sort_order sequentially
+- **Text limit:** 400K characters (`MAX_TOTAL_CHARS`)
+- **Inserts:** Chapters → sections → concepts → professor questions (sequential). Initializes `mastery_state` rows with `not_started` for every concept
+- **Status flow:** `pending` → `processing` (set by client before POST) → `completed` or `failed` (with `processing_error` message)
+- **Logging:** `[bg-process]` prefixed console.log at every step for debugging in Netlify logs
+- **Env vars:** `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (set in Netlify dashboard, no `VITE_` prefix)
+
+### Netlify Function: `process-chunk.ts`
+- **Status:** Legacy — superseded by background function but still deployed
+- **Purpose:** Thin serverless proxy for per-chunk Anthropic API calls (keeps API key server-side)
+- **CORS:** Whitelists localhost + `voice-ai-tutor.netlify.app`
+
+### Supabase Edge Function: `get-signed-url`
 - **Auth:** JWT verification via `supabase.auth.getUser(token)`
+- **Rate limiting:** 20 sessions/hour per user
 - **Context building:** Parallel fetches for profile, session, material text, chapters, sections, concepts, mastery, professor questions
-- **Position tracking:** Derives `last_concept_completed` and `current_concept_in_progress` from session's `current_concept_id` and mastery state. Falls back to walking the lesson plan when `current_concept_id` is null
+- **Position tracking:** Derives `last_concept_completed` and `current_concept_in_progress` from session's `current_concept_id` and mastery state
 - **Dynamic variables passed to ElevenLabs:** student name, education level, session type, days since last session, mastery summary, struggling/skipped concepts, last concept completed, current concept in progress, current chapter/section, lesson plan JSON, professor questions JSON, study material text (first 30K chars)
 - **External call:** `GET https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=...` with `xi-api-key` header
 - **Returns:** `{ signed_url, dynamic_variables }`
 
-### `process-material`
-- **Auth:** JWT verification + material ownership check
-- **Processing:** Claude Sonnet 4 (`claude-sonnet-4-20250514`) with structured JSON prompt
-- **Text limit:** 400K characters (truncated with notice)
-- **Inserts:** Chapters → sections → concepts → professor questions (sequential, error-tolerant)
-- **Status flow:** `pending` → `processing` → `completed` or `failed` (with error message)
-- **Anthropic SDK:** `@anthropic-ai/sdk@0.39.0` via esm.sh
+### Supabase Edge Function: `process-material` (legacy)
+- **Status:** Superseded by Netlify background function. Kept as fallback
+- **Has:** EdgeRuntime.waitUntil(), chunked processing, rate limiting (10/hr), sanitized errors
 
 ---
 
@@ -197,11 +238,14 @@ onDisconnect fires → record timestamp → start 5s timer
 ### Known issues
 - **Tab-switch disconnects** — The 5-second grace period helps but may not cover all cases. Browsers aggressively throttle/suspend background tabs. The current approach is best-effort; ElevenLabs may still drop connections on longer tab switches
 - **Speed slider disabled** — ElevenLabs V3 Conversational model does not support TTS speed overrides. Code is commented out, not deleted
+- **Supabase Edge Functions require manual deploy** — No `SUPABASE_ACCESS_TOKEN` in CI. Deploy manually via `npx supabase functions deploy <name> --no-verify-jwt --project-ref rfnxdtyzadsubosekefm`
+- **Legacy process-material Edge Function** — Still deployed but no longer the primary processing path. The Netlify background function has replaced it. Can be removed once background function is confirmed stable
 
 ### Next steps
 - [ ] Verify `update_session_state` client tool integration end-to-end with ElevenLabs
 - [ ] Validate mastery state transitions match system prompt spec
 - [ ] Test material processing with edge-case file formats (large files, complex layouts)
+- [ ] Remove legacy `supabase/functions/process-material/` and `netlify/functions/process-chunk.ts` once background function is confirmed stable
 - [ ] Add `@testing-library/react` + `jsdom` for component-level testing
 - [ ] Consider adding `material_id` to `sections`/`concepts` or an RPC to avoid global fetches in `fetchStudyPlan` and `fetchMaterialStructure`
 - [ ] Wire the `Database` type into `createClient<Database>()` for full type safety
@@ -211,11 +255,16 @@ onDisconnect fires → record timestamp → start 5s timer
 
 ## 9. Environment & Config
 
-**Required env vars** (see `.env.example`):
+**Client env vars** (see `.env.example`, `VITE_` prefix = bundled into JS):
 - `VITE_SUPABASE_URL` — Supabase project URL
 - `VITE_SUPABASE_ANON_KEY` — Supabase anonymous key
 
-**Edge Function env vars** (set in Supabase dashboard):
+**Netlify Function env vars** (set in Netlify dashboard, NOT `VITE_` prefixed):
+- `ANTHROPIC_API_KEY` — for background function + process-chunk proxy
+- `SUPABASE_URL` — Supabase project URL (server-side)
+- `SUPABASE_SERVICE_ROLE_KEY` — bypasses RLS for server-side DB writes
+
+**Supabase Edge Function env vars** (set in Supabase dashboard):
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 - `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`
 - `ANTHROPIC_API_KEY`
@@ -223,10 +272,10 @@ onDisconnect fires → record timestamp → start 5s timer
 **Scripts:**
 - `npm run dev` — Vite dev server
 - `npm run build` — TypeScript check + Vite production build
-- `npm test` — Vitest (92 tests)
+- `npm test` — Vitest (104 tests)
 - `npm run preview` — Preview production build
 
-**Deploy:** Netlify (auto-build from git, SPA fallback configured in `netlify.toml`)
+**Deploy:** Netlify (auto-build from git, SPA fallback configured in `netlify.toml`). Supabase Edge Functions deployed separately via `npx supabase functions deploy --no-verify-jwt --project-ref rfnxdtyzadsubosekefm`
 
 ---
 
