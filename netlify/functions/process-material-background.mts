@@ -328,12 +328,18 @@ export default async (req: Request, _context: Context) => {
   // Background functions return 202 automatically — Netlify invokes the
   // handler asynchronously after acknowledging the request.
 
+  console.log('[bg-process] Function invoked')
+
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
   const SUPABASE_URL = process.env.SUPABASE_URL
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!ANTHROPIC_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('Missing required environment variables')
+    console.error('[bg-process] Missing required environment variables', {
+      hasAnthropicKey: !!ANTHROPIC_API_KEY,
+      hasSupabaseUrl: !!SUPABASE_URL,
+      hasServiceRoleKey: !!SUPABASE_SERVICE_ROLE_KEY,
+    })
     return
   }
 
@@ -347,35 +353,58 @@ export default async (req: Request, _context: Context) => {
     const textContent: string = body.text_content
     const authToken: string = body.auth_token
 
+    console.log('[bg-process] Request body parsed', {
+      material_id: materialId,
+      user_id: userId,
+      hasTextContent: !!textContent,
+      textLength: textContent?.length ?? 0,
+      hasAuthToken: !!authToken,
+    })
+
     if (!materialId || !userId || !textContent || !authToken) {
-      console.error('Missing required fields in request body')
+      console.error('[bg-process] Missing required fields in request body')
       return
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+    // Set status to processing immediately so we can tell the function body is executing
+    console.log('[bg-process] Setting material status to processing')
+    const { error: statusError } = await supabase
+      .from('materials')
+      .update({ processing_status: 'processing' })
+      .eq('id', materialId)
+
+    if (statusError) {
+      console.error('[bg-process] Failed to set processing status:', statusError)
+    }
+
     // 1. Verify the auth token is valid (401 equivalent)
+    console.log('[bg-process] Verifying auth token...')
     const { data: { user }, error: authError } = await supabase.auth.getUser(authToken)
     if (authError || !user) {
-      console.error('Auth token invalid:', authError?.message ?? 'No user returned')
+      console.error('[bg-process] Auth token invalid:', authError?.message ?? 'No user returned')
       await supabase
         .from('materials')
         .update({ processing_status: 'failed', processing_error: 'Authentication failed' })
         .eq('id', materialId)
       return
     }
+    console.log('[bg-process] Auth token valid, user:', user.id)
 
     // 2. Confirm the token's user matches the claimed user_id (401 equivalent)
     if (user.id !== userId) {
-      console.error('Auth user mismatch: token user', user.id, '!= claimed user', userId)
+      console.error('[bg-process] Auth user mismatch: token user', user.id, '!= claimed user', userId)
       await supabase
         .from('materials')
         .update({ processing_status: 'failed', processing_error: 'Authentication failed' })
         .eq('id', materialId)
       return
     }
+    console.log('[bg-process] User ID match confirmed')
 
     // 3. Confirm the material belongs to this user (403 equivalent)
+    console.log('[bg-process] Checking material ownership...')
     const { data: material, error: matError } = await supabase
       .from('materials')
       .select('id, user_id')
@@ -383,18 +412,19 @@ export default async (req: Request, _context: Context) => {
       .single()
 
     if (matError || !material) {
-      console.error('Material not found:', materialId)
+      console.error('[bg-process] Material not found:', materialId, matError)
       return
     }
 
     if (material.user_id !== user.id) {
-      console.error('Material ownership mismatch: material belongs to', material.user_id, 'not', user.id)
+      console.error('[bg-process] Material ownership mismatch: material belongs to', material.user_id, 'not', user.id)
       await supabase
         .from('materials')
         .update({ processing_status: 'failed', processing_error: 'Forbidden' })
         .eq('id', materialId)
       return
     }
+    console.log('[bg-process] Material ownership confirmed')
 
     // Truncate if needed
     const text = textContent.length > MAX_TOTAL_CHARS
@@ -402,14 +432,15 @@ export default async (req: Request, _context: Context) => {
       : textContent
 
     const chunks = splitTextIntoChunks(text)
-    console.log(`Processing material ${materialId}: ${text.length} chars, ${chunks.length} chunk(s)`)
+    console.log(`[bg-process] Starting Anthropic calls: ${text.length} chars, ${chunks.length} chunk(s)`)
 
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
     const chunkResults: StructuredPlan[] = []
     for (let i = 0; i < chunks.length; i++) {
-      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`)
+      console.log(`[bg-process] Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`)
       const result = await processChunk(anthropic, chunks[i], i, chunks.length)
+      console.log(`[bg-process] Chunk ${i + 1} completed: ${result.chapters?.length ?? 0} chapters`)
       chunkResults.push(result)
     }
 
@@ -419,6 +450,7 @@ export default async (req: Request, _context: Context) => {
       throw new Error('No chapters found in structured plan')
     }
 
+    console.log(`[bg-process] Writing plan to Supabase: ${plan.chapters.length} chapters`)
     await writePlanToSupabase(supabase, plan, materialId, userId)
 
     await supabase
@@ -426,9 +458,9 @@ export default async (req: Request, _context: Context) => {
       .update({ processing_status: 'completed' })
       .eq('id', materialId)
 
-    console.log(`Material ${materialId} processing completed successfully`)
+    console.log(`[bg-process] Material ${materialId} processing completed successfully`)
   } catch (err) {
-    console.error('Background processing error:', err)
+    console.error('[bg-process] Background processing error:', err)
 
     if (materialId) {
       try {
@@ -444,7 +476,7 @@ export default async (req: Request, _context: Context) => {
           })
           .eq('id', materialId)
       } catch (updateErr) {
-        console.error('Failed to update material status:', updateErr)
+        console.error('[bg-process] Failed to update material status:', updateErr)
       }
     }
   }
