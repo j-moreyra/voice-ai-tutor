@@ -8,11 +8,6 @@
 [functions]
   directory = "netlify/functions"
 
-# Let Netlify Functions handle their own routes before the SPA catch-all
-[[redirects]]
-  from = "/.netlify/functions/*"
-  status = 200
-
 [[redirects]]
   from = "/*"
   to = "/index.html"
