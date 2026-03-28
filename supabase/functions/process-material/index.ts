@@ -106,6 +106,139 @@ function jsonResponse(body: unknown, status: number, origin: string | null): Res
   })
 }
 
+async function processInBackground(
+  materialId: string,
+  userId: string,
+  textContent: string,
+): Promise<void> {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  try {
+    const maxChars = 400_000
+    const text = textContent.length > maxChars
+      ? textContent.slice(0, maxChars) + '\n\n[Content truncated due to length]'
+      : textContent
+
+    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16000,
+      messages: [
+        {
+          role: 'user',
+          content: `${PROCESSING_PROMPT}\n\n---\n\nHere is the extracted text:\n\n${text}`,
+        },
+      ],
+    })
+
+    const responseText = message.content
+      .filter((block: { type: string }) => block.type === 'text')
+      .map((block: { type: string; text: string }) => block.text)
+      .join('')
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      throw new Error('Claude did not return valid JSON')
+    }
+
+    const plan: StructuredPlan = JSON.parse(jsonMatch[0])
+
+    if (!plan.chapters?.length) {
+      throw new Error('No chapters found in structured plan')
+    }
+
+    const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
+
+    for (const chapter of plan.chapters) {
+      const { data: chapterRow, error: chapterErr } = await supabase
+        .from('chapters')
+        .insert({
+          material_id: materialId,
+          user_id: userId,
+          title: chapter.title,
+          sort_order: chapter.sort_order,
+        })
+        .select('id')
+        .single()
+
+      if (chapterErr || !chapterRow) {
+        console.error('Failed to insert chapter:', chapterErr)
+        continue
+      }
+
+      chapterMap.set(chapter.title, { id: chapterRow.id, sectionMap: new Map<string, string>() })
+
+      for (const section of chapter.sections) {
+        const { data: sectionRow, error: sectionErr } = await supabase
+          .from('sections')
+          .insert({
+            chapter_id: chapterRow.id,
+            user_id: userId,
+            title: section.title,
+            sort_order: section.sort_order,
+          })
+          .select('id')
+          .single()
+
+        if (sectionErr || !sectionRow) {
+          console.error('Failed to insert section:', sectionErr)
+          continue
+        }
+
+        chapterMap.get(chapter.title)!.sectionMap.set(section.title, sectionRow.id)
+
+        if (section.concepts.length) {
+          const conceptRows = section.concepts.map((c) => ({
+            section_id: sectionRow.id,
+            user_id: userId,
+            title: c.title,
+            key_facts: c.key_facts,
+            sort_order: c.sort_order,
+          }))
+
+          const { error: conceptErr } = await supabase.from('concepts').insert(conceptRows)
+          if (conceptErr) console.error('Failed to insert concepts:', conceptErr)
+        }
+      }
+
+    }
+
+    if (plan.professor_questions?.length) {
+      const questionRows = plan.professor_questions.map((q) => {
+        const chapterEntry = q.chapter_title ? chapterMap.get(q.chapter_title) : undefined
+        return {
+          chapter_id: chapterEntry?.id ?? null,
+          section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
+          user_id: userId,
+          question_text: q.question_text,
+          question_type: q.question_type,
+          suggested_placement: q.suggested_placement,
+        }
+      })
+
+      const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
+      if (qErr) console.error('Failed to insert questions:', qErr)
+    }
+
+    await supabase
+      .from('materials')
+      .update({ processing_status: 'completed' })
+      .eq('id', materialId)
+
+  } catch (err) {
+    console.error('Background processing error:', err)
+
+    await supabase
+      .from('materials')
+      .update({
+        processing_status: 'failed',
+        processing_error: (err as Error).message,
+      })
+      .eq('id', materialId)
+  }
+}
+
 Deno.serve(async (req) => {
   const origin = req.headers.get('origin')
 
@@ -167,131 +300,9 @@ Deno.serve(async (req) => {
     .update({ processing_status: 'processing' })
     .eq('id', material_id)
 
-  try {
-    const maxChars = 400_000
-    const text = text_content.length > maxChars
-      ? text_content.slice(0, maxChars) + '\n\n[Content truncated due to length]'
-      : text_content
+  // Hand off the Claude API call and DB writes to run after the response is sent.
+  // This avoids the 150-second edge function timeout killing long-running processing.
+  EdgeRuntime.waitUntil(processInBackground(material_id, user.id, text_content))
 
-    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
-
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [
-        {
-          role: 'user',
-          content: `${PROCESSING_PROMPT}\n\n---\n\nHere is the extracted text:\n\n${text}`,
-        },
-      ],
-    })
-
-    const responseText = message.content
-      .filter((block: { type: string }) => block.type === 'text')
-      .map((block: { type: string; text: string }) => block.text)
-      .join('')
-
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      throw new Error('Claude did not return valid JSON')
-    }
-
-    const plan: StructuredPlan = JSON.parse(jsonMatch[0])
-
-    if (!plan.chapters?.length) {
-      throw new Error('No chapters found in structured plan')
-    }
-
-    const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
-
-    for (const chapter of plan.chapters) {
-      const { data: chapterRow, error: chapterErr } = await supabase
-        .from('chapters')
-        .insert({
-          material_id,
-          user_id: user.id,
-          title: chapter.title,
-          sort_order: chapter.sort_order,
-        })
-        .select('id')
-        .single()
-
-      if (chapterErr || !chapterRow) {
-        console.error('Failed to insert chapter:', chapterErr)
-        continue
-      }
-
-      chapterMap.set(chapter.title, { id: chapterRow.id, sectionMap: new Map<string, string>() })
-
-      for (const section of chapter.sections) {
-        const { data: sectionRow, error: sectionErr } = await supabase
-          .from('sections')
-          .insert({
-            chapter_id: chapterRow.id,
-            user_id: user.id,
-            title: section.title,
-            sort_order: section.sort_order,
-          })
-          .select('id')
-          .single()
-
-        if (sectionErr || !sectionRow) {
-          console.error('Failed to insert section:', sectionErr)
-          continue
-        }
-
-        chapterMap.get(chapter.title)!.sectionMap.set(section.title, sectionRow.id)
-
-        if (section.concepts.length) {
-          const conceptRows = section.concepts.map((c) => ({
-            section_id: sectionRow.id,
-            user_id: user.id,
-            title: c.title,
-            key_facts: c.key_facts,
-            sort_order: c.sort_order,
-          }))
-
-          const { error: conceptErr } = await supabase.from('concepts').insert(conceptRows)
-          if (conceptErr) console.error('Failed to insert concepts:', conceptErr)
-        }
-      }
-
-    }
-
-    if (plan.professor_questions?.length) {
-      const questionRows = plan.professor_questions.map((q) => {
-        const chapterEntry = q.chapter_title ? chapterMap.get(q.chapter_title) : undefined
-        return {
-          chapter_id: chapterEntry?.id ?? null,
-          section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
-          user_id: user.id,
-          question_text: q.question_text,
-          question_type: q.question_type,
-          suggested_placement: q.suggested_placement,
-        }
-      })
-
-      const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
-      if (qErr) console.error('Failed to insert questions:', qErr)
-    }
-
-    await supabase
-      .from('materials')
-      .update({ processing_status: 'completed' })
-      .eq('id', material_id)
-
-    return jsonResponse({ success: true }, 200, origin)
-  } catch (err) {
-    console.error('Processing error:', err)
-
-    await supabase
-      .from('materials')
-      .update({
-        processing_status: 'failed',
-        processing_error: (err as Error).message,
-      })
-      .eq('id', material_id)
-
-    return jsonResponse({ error: 'An internal error occurred while processing the material' }, 500, origin)
-  }
+  return jsonResponse({ accepted: true, material_id }, 202, origin)
 })
