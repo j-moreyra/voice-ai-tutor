@@ -79,7 +79,7 @@ beforeEach(() => {
   } as unknown as Record<string, ReturnType<typeof vi.fn>>
   mockRemoveChannel = vi.fn()
 
-  // Mock global fetch for Netlify background function call
+  // Mock global fetch for edge function call
   originalFetch = globalThis.fetch
   mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 202 })
   globalThis.fetch = mockFetch
@@ -216,26 +216,27 @@ describe('uploadMaterial', () => {
     expect(stages).toContain('processing')
   })
 
-  it('invokes the Netlify background function on success', async () => {
+  it('invokes the Supabase edge function on success', async () => {
     mockExtractText.mockResolvedValue('x'.repeat(200))
     fromResults.materials = { data: { id: 'mat-abc' }, error: null }
     await uploadMaterial('user1', pdfFile())
     // Give the fire-and-forget promise a tick to execute
     await new Promise((r) => setTimeout(r, 10))
     expect(mockFetch).toHaveBeenCalledWith(
-      '/.netlify/functions/process-material-background',
+      expect.stringContaining('/functions/v1/process-material'),
       expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer tok',
+        }),
       }),
     )
     // Verify the body includes required fields
     const call = mockFetch.mock.calls[0]
     const body = JSON.parse(call[1].body)
     expect(body.material_id).toBe('mat-abc')
-    expect(body.user_id).toBe('user1')
     expect(body.text_content).toBe('x'.repeat(200))
-    expect(body.auth_token).toBe('tok')
   })
 })
 
