@@ -95,37 +95,33 @@ export async function uploadMaterial(
   // 4. Notify caller so the material card appears immediately
   onMaterialCreated?.()
 
-  // 5. Kick off background processing via Netlify background function.
-  //    Background functions get a 15-minute timeout — enough for large documents.
-  //    The function returns 202 immediately; processing happens asynchronously.
+  // 5. Kick off background processing via Supabase Edge Function.
+  //    The function returns 202 immediately and processes via EdgeRuntime.waitUntil().
   onProgress?.('processing')
   const materialId = (material as Material).id
 
-  await supabase
-    .from('materials')
-    .update({ processing_status: 'processing' })
-    .eq('id', materialId)
-
   const { data: { session } } = await supabase.auth.getSession()
-  console.log('[uploadMaterial] Invoking background processing', { material_id: materialId })
+  console.log('[uploadMaterial] Invoking edge function processing', { material_id: materialId })
 
-  fetch('/.netlify/functions/process-material-background', {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+  fetch(`${supabaseUrl}/functions/v1/process-material`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session?.access_token}`,
+    },
     body: JSON.stringify({
       material_id: materialId,
       text_content: extractedText,
-      user_id: userId,
-      auth_token: session?.access_token,
     }),
   }).then((res) => {
     if (!res.ok) {
-      console.error('[uploadMaterial] Background function returned', res.status)
+      console.error('[uploadMaterial] Edge function returned', res.status)
     } else {
-      console.log('[uploadMaterial] Background function accepted (202)')
+      console.log('[uploadMaterial] Edge function accepted (202)')
     }
   }).catch((err) => {
-    console.error('[uploadMaterial] Background function invocation failed:', err)
+    console.error('[uploadMaterial] Edge function invocation failed:', err)
   })
 
   return { error: null }
