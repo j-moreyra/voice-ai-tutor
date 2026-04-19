@@ -349,7 +349,10 @@ export async function uploadMaterial(
     return { error: `Storage upload failed: ${storageError.message}` }
   }
 
-  // 3. Create material record
+  // 3. Create material record. Set processing_status to 'processing' at
+  //    insert time so there is no window where the row sits at 'pending' —
+  //    the UI's stuck-detection only covers 'processing', so a 'pending' row
+  //    abandoned by a closed tab would otherwise never reach a terminal state.
   const { data: material, error: insertError } = await supabase
     .from('materials')
     .insert({
@@ -358,6 +361,7 @@ export async function uploadMaterial(
       file_type: fileType,
       storage_path: storagePath,
       file_size_bytes: file.size,
+      processing_status: 'processing',
     })
     .select()
     .single()
@@ -390,11 +394,6 @@ async function processChunkedMaterial(
   textContent: string,
 ): Promise<void> {
   try {
-    await supabase
-      .from('materials')
-      .update({ processing_status: 'processing' })
-      .eq('id', materialId)
-
     const { data: { session } } = await supabase.auth.getSession()
     if (!session?.access_token) {
       throw new Error('Not authenticated')
