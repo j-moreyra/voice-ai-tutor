@@ -216,12 +216,18 @@ describe('uploadMaterial', () => {
     expect(stages).toContain('processing')
   })
 
-  it('invokes the Supabase edge function on success', async () => {
+  it('invokes the Supabase edge function per chunk on success', async () => {
     mockExtractText.mockResolvedValue('x'.repeat(200))
     fromResults.materials = { data: { id: 'mat-abc' }, error: null }
+    // Mock the edge function to return a valid structured plan
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ chapters: [{ title: 'Ch1', sort_order: 0, sections: [] }] }),
+    })
     await uploadMaterial('user1', pdfFile())
-    // Give the fire-and-forget promise a tick to execute
-    await new Promise((r) => setTimeout(r, 10))
+    // Give the fire-and-forget promise time to execute chunk processing
+    await new Promise((r) => setTimeout(r, 50))
     expect(mockFetch).toHaveBeenCalledWith(
       expect.stringContaining('/functions/v1/process-material'),
       expect.objectContaining({
@@ -232,11 +238,13 @@ describe('uploadMaterial', () => {
         }),
       }),
     )
-    // Verify the body includes required fields
+    // Verify the body includes chunk fields
     const call = mockFetch.mock.calls[0]
     const body = JSON.parse(call[1].body)
     expect(body.material_id).toBe('mat-abc')
-    expect(body.text_content).toBe('x'.repeat(200))
+    expect(body.chunk_text).toBeDefined()
+    expect(body.chunk_index).toBe(0)
+    expect(body.total_chunks).toBe(1)
   })
 })
 
