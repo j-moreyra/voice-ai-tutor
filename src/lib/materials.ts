@@ -103,16 +103,24 @@ async function processChunkViaProxy(
   chunkIndex: number,
   totalChunks: number,
   materialId: string,
-  accessToken: string,
 ): Promise<StructuredPlan> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Re-read the session on every attempt. The Supabase client auto-refreshes
+    // the JWT in the background, so this returns the current valid token. A
+    // long-running upload (67+ chunks on rate-limited tiers) can otherwise
+    // outlive the 1-hour token lifetime and start 401-ing mid-loop.
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token) {
+      throw new Error('Session expired — please sign in again')
+    }
+
     const res = await fetch(`${supabaseUrl}/functions/v1/process-material`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
+        'Authorization': `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({
         material_id: materialId,
@@ -394,11 +402,6 @@ async function processChunkedMaterial(
   textContent: string,
 ): Promise<void> {
   try {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session?.access_token) {
-      throw new Error('Not authenticated')
-    }
-
     const text = textContent.length > MAX_TOTAL_CHARS
       ? textContent.slice(0, MAX_TOTAL_CHARS) + '\n\n[Content truncated due to length]'
       : textContent
@@ -410,7 +413,7 @@ async function processChunkedMaterial(
     for (let i = 0; i < chunks.length; i++) {
       console.log(`[processing] Chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`)
       const result = await processChunkViaProxy(
-        chunks[i], i, chunks.length, materialId, session.access_token,
+        chunks[i], i, chunks.length, materialId,
       )
       console.log(`[processing] Chunk ${i + 1} done: ${result.chapters?.length ?? 0} chapters`)
       chunkResults.push(result)
