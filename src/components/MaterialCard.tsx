@@ -55,10 +55,12 @@ export default function MaterialCard({ material, onSelect, onDeleted }: Material
   const isClickable = material.processing_status === 'completed'
   const isProcessing = material.processing_status === 'processing' || material.processing_status === 'pending'
 
-  // Detect stuck processing (>3 minutes since last update)
+  // Detect stuck processing (>5 minutes since last update).
+  // The edge function heartbeats updated_at after each chunk, so 5 min is
+  // generous enough to cover one chunk's worth of rate-limit retry backoff.
   const isStuck =
     material.processing_status === 'processing' &&
-    Date.now() - new Date(material.updated_at).getTime() > 3 * 60 * 1000
+    Date.now() - new Date(material.updated_at).getTime() > 5 * 60 * 1000
 
   const displayStatus = isStuck ? 'failed' : material.processing_status
   const displayLabel = isStuck ? 'Stuck' : STATUS_LABELS[material.processing_status]

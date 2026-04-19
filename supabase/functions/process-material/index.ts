@@ -296,6 +296,13 @@ async function processInBackground(
       const result = await processChunk(anthropic, chunks[i], i, chunks.length)
       console.log(`[process-material] Chunk ${i + 1} done: ${result.chapters?.length ?? 0} chapters`)
       chunkResults.push(result)
+
+      // Heartbeat: touch updated_at so the UI's "stuck" detection (3-min threshold)
+      // doesn't false-positive while we're waiting for rate-limit retries between chunks.
+      await supabase
+        .from('materials')
+        .update({ processing_status: 'processing' })
+        .eq('id', materialId)
     }
 
     const plan = mergePlans(chunkResults)
