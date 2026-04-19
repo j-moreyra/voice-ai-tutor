@@ -13,12 +13,6 @@ const ENV_ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173', 'https://voice-ai-tutor.netlify.app']
 const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...ENV_ALLOWED_ORIGINS])]
 
-const CHUNK_SIZE = 6_000
-const OVERLAP_SIZE = 500
-const MAX_TOTAL_CHARS = 400_000
-// Anthropic Tier 1 rate limit is 8K output tokens per minute. Stay safely below
-// that per request so a single chunk never gets rejected, and rely on retry
-// logic (with Retry-After) for the cross-request cumulative limit.
 const MAX_OUTPUT_TOKENS = 5_000
 
 const PROCESSING_PROMPT = `You are a material processing engine for an AI tutoring system. Your job is to take raw study material text and decompose it into the most granular possible lesson plan — every individual fact, definition, step, mechanism, classification, and sub-concept as its own discrete entry.
@@ -65,33 +59,6 @@ TERMINOLOGY: Use the exact same terms as the source material. Do not paraphrase,
 QUESTIONS: Extract any assessment questions, practice problems, review questions, quiz items, multiple choice, true/false, or essay prompts. Tag by type and suggest placement.
 Return ONLY the JSON object. No preamble, no markdown backticks, no explanation.`
 
-interface StructuredChapter {
-  title: string
-  sort_order: number
-  sections: {
-    title: string
-    sort_order: number
-    concepts: {
-      title: string
-      key_facts: string | null
-      sort_order: number
-    }[]
-  }[]
-}
-
-interface ProfessorQuestion {
-  question_text: string
-  question_type: string | null
-  suggested_placement: string | null
-  chapter_title: string | null
-  section_title: string | null
-}
-
-interface StructuredPlan {
-  chapters: StructuredChapter[]
-  professor_questions?: ProfessorQuestion[]
-}
-
 function buildCorsHeaders(origin: string | null): Record<string, string> {
   const allowedOrigin = origin && ALLOWED_ORIGINS.includes(origin)
     ? origin
@@ -114,315 +81,6 @@ function jsonResponse(body: unknown, status: number, origin: string | null): Res
       ...buildCorsHeaders(origin),
     },
   })
-}
-
-function splitTextIntoChunks(text: string): string[] {
-  if (text.length <= CHUNK_SIZE) return [text]
-
-  const chunks: string[] = []
-  let offset = 0
-
-  while (offset < text.length) {
-    let end = Math.min(offset + CHUNK_SIZE, text.length)
-
-    if (end < text.length) {
-      const searchStart = offset + Math.floor(CHUNK_SIZE * 0.8)
-      const breakZone = text.slice(searchStart, end)
-      const lastParagraph = breakZone.lastIndexOf('\n\n')
-      if (lastParagraph !== -1) {
-        end = searchStart + lastParagraph + 2
-      }
-    }
-
-    chunks.push(text.slice(offset, end))
-    offset = Math.max(end - OVERLAP_SIZE, offset + 1)
-    if (end >= text.length) break
-  }
-
-  return chunks
-}
-
-async function callAnthropicWithRetry(
-  anthropic: InstanceType<typeof Anthropic>,
-  prompt: string,
-  chunkIndex: number,
-  maxRetries = 5,
-): Promise<string> {
-  let lastError: unknown
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const message = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: MAX_OUTPUT_TOKENS,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      return message.content
-        .filter((block: { type: string }) => block.type === 'text')
-        .map((block: { type: string; text: string }) => block.text)
-        .join('')
-    } catch (err) {
-      lastError = err
-      const errObj = err as { status?: number; headers?: Record<string, string> }
-      const is429 = errObj.status === 429
-      const is529 = errObj.status === 529
-      if (!is429 && !is529) throw err
-
-      // Wait based on Retry-After header if present, else exponential backoff
-      const retryAfterHeader = errObj.headers?.['retry-after']
-      const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null
-      const backoffMs = retryAfterSec && !isNaN(retryAfterSec)
-        ? retryAfterSec * 1000
-        : Math.min(60_000, 2000 * Math.pow(2, attempt))
-
-      console.log(`[process-material] Rate limited on chunk ${chunkIndex + 1} (attempt ${attempt + 1}), waiting ${backoffMs}ms`)
-      await new Promise((resolve) => setTimeout(resolve, backoffMs))
-    }
-  }
-  throw lastError
-}
-
-async function processChunk(
-  anthropic: InstanceType<typeof Anthropic>,
-  chunkText: string,
-  chunkIndex: number,
-  totalChunks: number,
-): Promise<StructuredPlan> {
-  const chunkContext = totalChunks > 1
-    ? `\n\nIMPORTANT CONTEXT: This is chunk ${chunkIndex + 1} of ${totalChunks} from a larger document. Process ONLY the content in this chunk. Use sort_order values starting from ${chunkIndex * 1000} so they can be merged with other chunks later. If a chapter or section appears to continue from a previous chunk, use the EXACT same title so chunks can be merged.\n\n---\n\nHere is the extracted text for this chunk:\n\n`
-    : '\n\n---\n\nHere is the extracted text:\n\n'
-
-  const responseText = await callAnthropicWithRetry(
-    anthropic,
-    `${PROCESSING_PROMPT}${chunkContext}${chunkText}`,
-    chunkIndex,
-  )
-
-  const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) {
-    throw new Error(`Claude did not return valid JSON for chunk ${chunkIndex + 1}`)
-  }
-
-  return JSON.parse(jsonMatch[0]) as StructuredPlan
-}
-
-function mergePlans(plans: StructuredPlan[]): StructuredPlan {
-  if (plans.length === 1) return plans[0]
-
-  const chapterMap = new Map<string, {
-    title: string
-    sectionMap: Map<string, {
-      title: string
-      conceptMap: Map<string, { title: string; key_facts: string | null }>
-    }>
-  }>()
-
-  const allQuestions: ProfessorQuestion[] = []
-  const chapterOrder: string[] = []
-
-  for (const plan of plans) {
-    for (const chapter of (plan.chapters ?? [])) {
-      if (!chapterMap.has(chapter.title)) {
-        chapterMap.set(chapter.title, { title: chapter.title, sectionMap: new Map() })
-        chapterOrder.push(chapter.title)
-      }
-      const entry = chapterMap.get(chapter.title)!
-
-      for (const section of chapter.sections) {
-        if (!entry.sectionMap.has(section.title)) {
-          entry.sectionMap.set(section.title, { title: section.title, conceptMap: new Map() })
-        }
-        const sectionEntry = entry.sectionMap.get(section.title)!
-
-        for (const concept of section.concepts) {
-          if (!sectionEntry.conceptMap.has(concept.title)) {
-            sectionEntry.conceptMap.set(concept.title, { title: concept.title, key_facts: concept.key_facts })
-          }
-        }
-      }
-    }
-
-    if (plan.professor_questions?.length) {
-      allQuestions.push(...plan.professor_questions)
-    }
-  }
-
-  const chapters: StructuredChapter[] = []
-  let chapterIdx = 0
-  for (const chapterTitle of chapterOrder) {
-    const entry = chapterMap.get(chapterTitle)!
-    const sections: StructuredChapter['sections'] = []
-    let sectionIdx = 0
-    for (const [, sectionEntry] of entry.sectionMap) {
-      const concepts: StructuredChapter['sections'][0]['concepts'] = []
-      let conceptIdx = 0
-      for (const [, concept] of sectionEntry.conceptMap) {
-        concepts.push({ title: concept.title, key_facts: concept.key_facts, sort_order: conceptIdx++ })
-      }
-      sections.push({ title: sectionEntry.title, sort_order: sectionIdx++, concepts })
-    }
-    chapters.push({ title: entry.title, sort_order: chapterIdx++, sections })
-  }
-
-  const seenQuestions = new Set<string>()
-  const uniqueQuestions = allQuestions.filter((q) => {
-    if (seenQuestions.has(q.question_text)) return false
-    seenQuestions.add(q.question_text)
-    return true
-  })
-
-  return { chapters, professor_questions: uniqueQuestions.length ? uniqueQuestions : undefined }
-}
-
-async function processInBackground(
-  materialId: string,
-  userId: string,
-  textContent: string,
-): Promise<void> {
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-  try {
-    const text = textContent.length > MAX_TOTAL_CHARS
-      ? textContent.slice(0, MAX_TOTAL_CHARS) + '\n\n[Content truncated due to length]'
-      : textContent
-
-    const chunks = splitTextIntoChunks(text)
-    console.log(`[process-material] Processing ${materialId}: ${text.length} chars, ${chunks.length} chunk(s)`)
-
-    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
-
-    const chunkResults: StructuredPlan[] = []
-    for (let i = 0; i < chunks.length; i++) {
-      console.log(`[process-material] Chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`)
-      const result = await processChunk(anthropic, chunks[i], i, chunks.length)
-      console.log(`[process-material] Chunk ${i + 1} done: ${result.chapters?.length ?? 0} chapters`)
-      chunkResults.push(result)
-
-      // Heartbeat: touch updated_at so the UI's "stuck" detection (3-min threshold)
-      // doesn't false-positive while we're waiting for rate-limit retries between chunks.
-      await supabase
-        .from('materials')
-        .update({ processing_status: 'processing' })
-        .eq('id', materialId)
-    }
-
-    const plan = mergePlans(chunkResults)
-
-    if (!plan.chapters?.length) {
-      throw new Error('No chapters found in structured plan')
-    }
-
-    console.log(`[process-material] Writing ${plan.chapters.length} chapters to DB`)
-
-    const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
-    const allConceptIds: string[] = []
-
-    for (const chapter of plan.chapters) {
-      const { data: chapterRow, error: chapterErr } = await supabase
-        .from('chapters')
-        .insert({
-          material_id: materialId,
-          user_id: userId,
-          title: chapter.title,
-          sort_order: chapter.sort_order,
-        })
-        .select('id')
-        .single()
-
-      if (chapterErr || !chapterRow) {
-        console.error('[process-material] Failed to insert chapter:', chapterErr)
-        continue
-      }
-
-      chapterMap.set(chapter.title, { id: chapterRow.id, sectionMap: new Map<string, string>() })
-
-      for (const section of chapter.sections) {
-        const { data: sectionRow, error: sectionErr } = await supabase
-          .from('sections')
-          .insert({
-            chapter_id: chapterRow.id,
-            user_id: userId,
-            title: section.title,
-            sort_order: section.sort_order,
-          })
-          .select('id')
-          .single()
-
-        if (sectionErr || !sectionRow) {
-          console.error('[process-material] Failed to insert section:', sectionErr)
-          continue
-        }
-
-        chapterMap.get(chapter.title)!.sectionMap.set(section.title, sectionRow.id)
-
-        if (section.concepts.length) {
-          const conceptRows = section.concepts.map((c) => ({
-            section_id: sectionRow.id,
-            user_id: userId,
-            title: c.title,
-            key_facts: c.key_facts,
-            sort_order: c.sort_order,
-          }))
-
-          const { data: insertedConcepts, error: conceptErr } = await supabase
-            .from('concepts')
-            .insert(conceptRows)
-            .select('id')
-
-          if (conceptErr) {
-            console.error('[process-material] Failed to insert concepts:', conceptErr)
-          } else if (insertedConcepts) {
-            allConceptIds.push(...insertedConcepts.map((c: { id: string }) => c.id))
-          }
-        }
-      }
-    }
-
-    if (allConceptIds.length) {
-      console.log(`[process-material] Initializing ${allConceptIds.length} mastery_state rows`)
-      const masteryRows = allConceptIds.map((conceptId) => ({
-        concept_id: conceptId,
-        user_id: userId,
-        status: 'not_started',
-      }))
-
-      const { error: masteryErr } = await supabase.from('mastery_state').insert(masteryRows)
-      if (masteryErr) console.error('[process-material] Failed to insert mastery_state rows:', masteryErr)
-    }
-
-    if (plan.professor_questions?.length) {
-      const questionRows = plan.professor_questions.map((q) => {
-        const chapterEntry = q.chapter_title ? chapterMap.get(q.chapter_title) : undefined
-        return {
-          chapter_id: chapterEntry?.id ?? null,
-          section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
-          user_id: userId,
-          question_text: q.question_text,
-          question_type: q.question_type,
-          suggested_placement: q.suggested_placement,
-        }
-      })
-
-      const { error: qErr } = await supabase.from('professor_questions').insert(questionRows)
-      if (qErr) console.error('[process-material] Failed to insert questions:', qErr)
-    }
-
-    await supabase
-      .from('materials')
-      .update({ processing_status: 'completed' })
-      .eq('id', materialId)
-
-    console.log(`[process-material] Material ${materialId} completed successfully`)
-  } catch (err) {
-    console.error('[process-material] Processing error:', err)
-
-    await supabase
-      .from('materials')
-      .update({
-        processing_status: 'failed',
-        processing_error: (err as Error).message,
-      })
-      .eq('id', materialId)
-  }
 }
 
 Deno.serve(async (req) => {
@@ -449,9 +107,10 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Invalid token' }, 401, origin)
   }
 
-  const { material_id, text_content } = await req.json()
-  if (!material_id || !text_content) {
-    return jsonResponse({ error: 'Missing material_id or text_content' }, 400, origin)
+  const body = await req.json()
+  const { material_id, chunk_text, chunk_index, total_chunks } = body
+  if (!material_id || !chunk_text || chunk_index == null || !total_chunks) {
+    return jsonResponse({ error: 'Missing required fields: material_id, chunk_text, chunk_index, total_chunks' }, 400, origin)
   }
 
   const { data: material, error: matError } = await supabase
@@ -464,23 +123,48 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: 'Material not found' }, 404, origin)
   }
 
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-  const { count: recentCount } = await supabase
-    .from('materials')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-    .gte('created_at', oneHourAgo)
+  try {
+    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
-  if (recentCount != null && recentCount >= 10) {
-    return jsonResponse({ error: 'Rate limit exceeded. Please wait before uploading more materials.' }, 429, origin)
+    const chunkContext = total_chunks > 1
+      ? `\n\nIMPORTANT CONTEXT: This is chunk ${chunk_index + 1} of ${total_chunks} from a larger document. Process ONLY the content in this chunk. Use sort_order values starting from ${chunk_index * 1000} so they can be merged with other chunks later. If a chapter or section appears to continue from a previous chunk, use the EXACT same title so chunks can be merged.\n\n---\n\nHere is the extracted text for this chunk:\n\n`
+      : '\n\n---\n\nHere is the extracted text:\n\n'
+
+    console.log(`[process-material] Chunk ${chunk_index + 1}/${total_chunks} (${chunk_text.length} chars)`)
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: MAX_OUTPUT_TOKENS,
+      messages: [{ role: 'user', content: `${PROCESSING_PROMPT}${chunkContext}${chunk_text}` }],
+    })
+
+    const responseText = message.content
+      .filter((block: { type: string }) => block.type === 'text')
+      .map((block: { type: string; text: string }) => block.text)
+      .join('')
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      return jsonResponse({ error: `Claude did not return valid JSON for chunk ${chunk_index + 1}` }, 502, origin)
+    }
+
+    const plan = JSON.parse(jsonMatch[0])
+    console.log(`[process-material] Chunk ${chunk_index + 1} done: ${plan.chapters?.length ?? 0} chapters`)
+
+    return jsonResponse(plan, 200, origin)
+  } catch (err) {
+    const errObj = err as { status?: number; message?: string; headers?: Record<string, string> }
+
+    if (errObj.status === 429) {
+      const retryAfter = errObj.headers?.['retry-after'] ?? '60'
+      return jsonResponse(
+        { error: 'rate_limited', retry_after: parseInt(retryAfter, 10) || 60 },
+        429,
+        origin,
+      )
+    }
+
+    console.error('[process-material] Anthropic error:', err)
+    return jsonResponse({ error: (err as Error).message }, 500, origin)
   }
-
-  await supabase
-    .from('materials')
-    .update({ processing_status: 'processing' })
-    .eq('id', material_id)
-
-  EdgeRuntime.waitUntil(processInBackground(material_id, user.id, text_content))
-
-  return jsonResponse({ accepted: true, material_id }, 202, origin)
 })
