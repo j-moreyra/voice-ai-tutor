@@ -1,5 +1,7 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.80.0'
+
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -123,6 +125,7 @@ Deno.serve(async (req) => {
 
   const authHeader = req.headers.get('Authorization')
   if (!authHeader) {
+    console.error('[process-material] Missing Authorization header')
     return jsonResponse({ error: 'Missing authorization' }, 401, origin)
   }
 
@@ -132,10 +135,34 @@ Deno.serve(async (req) => {
     error: authError,
   } = await supabase.auth.getUser(token)
   if (authError || !user) {
+    console.error('[process-material] Auth failed', { authError: authError?.message })
     return jsonResponse({ error: 'Invalid token' }, 401, origin)
   }
 
-  const { material_id, text_content } = await req.json()
+  let body: Record<string, unknown>
+  try {
+    body = await req.json()
+  } catch (e) {
+    console.error('[process-material] Failed to parse JSON body', {
+      error: (e as Error).message,
+      contentType: req.headers.get('content-type'),
+      contentLength: req.headers.get('content-length'),
+    })
+    return jsonResponse({ error: 'Invalid JSON body' }, 400, origin)
+  }
+
+  const material_id = typeof body.material_id === 'string' ? body.material_id : undefined
+  const text_content = typeof body.text_content === 'string' ? body.text_content : undefined
+
+  console.log('[process-material] Request received', {
+    user_id: user.id,
+    body_keys: Object.keys(body),
+    material_id_present: !!material_id,
+    text_content_length: text_content?.length ?? 0,
+    content_length: req.headers.get('content-length'),
+    content_type: req.headers.get('content-type'),
+  })
+
   if (!material_id || !text_content) {
     return jsonResponse({ error: 'Missing material_id or text_content' }, 400, origin)
   }
@@ -147,6 +174,7 @@ Deno.serve(async (req) => {
     .single()
 
   if (matError || !material || material.user_id !== user.id) {
+    console.error('[process-material] Material lookup failed', { material_id, matError: matError?.message })
     return jsonResponse({ error: 'Material not found' }, 404, origin)
   }
 
@@ -167,11 +195,34 @@ Deno.serve(async (req) => {
     .update({ processing_status: 'processing' })
     .eq('id', material_id)
 
+  // Kick the heavy Claude call + DB inserts off in the background.
+  // Edge Functions kill the worker at ~150s wall clock when the client is still
+  // waiting, which was timing out large uploads. `waitUntil` decouples the
+  // response from the work and lets it run with its own budget while the
+  // Dashboard polls for status updates.
+  const work = processInBackground(supabase, material_id, text_content, user.id)
+  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+    EdgeRuntime.waitUntil(work)
+  } else {
+    work.catch((err) => console.error('[process-material] Background work failed (no runtime)', err))
+  }
+
+  return jsonResponse({ accepted: true, material_id }, 202, origin)
+})
+
+async function processInBackground(
+  supabase: SupabaseClient,
+  material_id: string,
+  text_content: string,
+  user_id: string,
+): Promise<void> {
   try {
     const maxChars = 400_000
     const text = text_content.length > maxChars
       ? text_content.slice(0, maxChars) + '\n\n[Content truncated due to length]'
       : text_content
+
+    console.log('[process-material] Calling Claude', { material_id, text_length: text.length })
 
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
@@ -202,6 +253,12 @@ Deno.serve(async (req) => {
       throw new Error('No chapters found in structured plan')
     }
 
+    console.log('[process-material] Inserting structured plan', {
+      material_id,
+      chapter_count: plan.chapters.length,
+      question_count: plan.professor_questions?.length ?? 0,
+    })
+
     const chapterMap = new Map<string, { id: string; sectionMap: Map<string, string> }>()
 
     for (const chapter of plan.chapters) {
@@ -209,7 +266,7 @@ Deno.serve(async (req) => {
         .from('chapters')
         .insert({
           material_id,
-          user_id: user.id,
+          user_id,
           title: chapter.title,
           sort_order: chapter.sort_order,
         })
@@ -228,7 +285,7 @@ Deno.serve(async (req) => {
           .from('sections')
           .insert({
             chapter_id: chapterRow.id,
-            user_id: user.id,
+            user_id,
             title: section.title,
             sort_order: section.sort_order,
           })
@@ -245,7 +302,7 @@ Deno.serve(async (req) => {
         if (section.concepts.length) {
           const conceptRows = section.concepts.map((c) => ({
             section_id: sectionRow.id,
-            user_id: user.id,
+            user_id,
             title: c.title,
             key_facts: c.key_facts,
             sort_order: c.sort_order,
@@ -255,7 +312,6 @@ Deno.serve(async (req) => {
           if (conceptErr) console.error('Failed to insert concepts:', conceptErr)
         }
       }
-
     }
 
     if (plan.professor_questions?.length) {
@@ -264,7 +320,7 @@ Deno.serve(async (req) => {
         return {
           chapter_id: chapterEntry?.id ?? null,
           section_id: q.section_title && chapterEntry ? chapterEntry.sectionMap.get(q.section_title) ?? null : null,
-          user_id: user.id,
+          user_id,
           question_text: q.question_text,
           question_type: q.question_type,
           suggested_placement: q.suggested_placement,
@@ -280,9 +336,9 @@ Deno.serve(async (req) => {
       .update({ processing_status: 'completed' })
       .eq('id', material_id)
 
-    return jsonResponse({ success: true }, 200, origin)
+    console.log('[process-material] Completed', { material_id })
   } catch (err) {
-    console.error('Processing error:', err)
+    console.error('[process-material] Processing failed', err)
 
     await supabase
       .from('materials')
@@ -291,7 +347,5 @@ Deno.serve(async (req) => {
         processing_error: (err as Error).message,
       })
       .eq('id', material_id)
-
-    return jsonResponse({ error: 'An internal error occurred while processing the material' }, 500, origin)
   }
-})
+}
