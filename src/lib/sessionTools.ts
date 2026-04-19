@@ -241,7 +241,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
               .single()
 
             if (section) {
-              await supabase
+              const { error: posErr } = await supabase
                 .from('sessions')
                 .update({
                   current_chapter_id: section.chapter_id,
@@ -249,6 +249,7 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
                   current_concept_id: lastConceptId,
                 })
                 .eq('id', sessionId)
+              if (posErr) console.warn('Auto position update rejected:', posErr.message)
               const titles = await fetchPositionTitles(section.chapter_id, concept.section_id)
               if (titles) emitPositionChanged(sessionId, titles.chapterTitle, titles.sectionTitle)
             }
