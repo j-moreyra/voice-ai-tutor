@@ -418,11 +418,27 @@ async function processChunkedMaterial(
       console.log(`[processing] Chunk ${i + 1} done: ${result.chapters?.length ?? 0} chapters`)
       chunkResults.push(result)
 
-      // Heartbeat so the UI doesn't show "Stuck"
-      await supabase
+      // Heartbeat. Writing processing_status='processing' alone is a no-op for
+      // updated_at because the row's content is unchanged and Postgres's
+      // updated_at trigger short-circuits when OLD IS NOT DISTINCT FROM NEW,
+      // so set updated_at explicitly.
+      const { error: heartbeatErr } = await supabase
         .from('materials')
-        .update({ processing_status: 'processing' })
+        .update({
+          processing_status: 'processing',
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', materialId)
+
+      // A heartbeat rejection is almost always RLS or a dead session. Bail on
+      // the first one so we don't spend 20+ minutes burning Anthropic tokens
+      // on an upload whose status flip will never land.
+      if (heartbeatErr && i === 0) {
+        throw new Error(`Heartbeat rejected on first chunk — upload cannot be finalized (${heartbeatErr.message})`)
+      }
+      if (heartbeatErr) {
+        console.warn(`[processing] Heartbeat failed on chunk ${i + 1}: ${heartbeatErr.message}`)
+      }
     }
 
     const plan = mergePlans(chunkResults)
@@ -434,21 +450,32 @@ async function processChunkedMaterial(
     console.log(`[processing] Writing ${plan.chapters.length} chapters to DB`)
     await writePlanToSupabase(plan, materialId, userId)
 
-    await supabase
+    const { error: completeErr } = await supabase
       .from('materials')
-      .update({ processing_status: 'completed' })
+      .update({
+        processing_status: 'completed',
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', materialId)
+
+    if (completeErr) {
+      throw new Error(`Failed to mark material completed: ${completeErr.message}`)
+    }
 
     console.log(`[processing] Material ${materialId} completed`)
   } catch (err) {
     console.error('[processing] Error:', err)
-    await supabase
+    const { error: failErr } = await supabase
       .from('materials')
       .update({
         processing_status: 'failed',
         processing_error: (err as Error).message,
+        updated_at: new Date().toISOString(),
       })
       .eq('id', materialId)
+    if (failErr) {
+      console.error('[processing] Could not even write failure state — the row will stay in processing:', failErr.message)
+    }
   }
 }
 
