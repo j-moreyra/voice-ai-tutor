@@ -13,9 +13,13 @@ const ENV_ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:4173', 'https://voice-ai-tutor.netlify.app']
 const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...ENV_ALLOWED_ORIGINS])]
 
-const CHUNK_SIZE = 8_000
+const CHUNK_SIZE = 6_000
 const OVERLAP_SIZE = 500
 const MAX_TOTAL_CHARS = 400_000
+// Anthropic Tier 1 rate limit is 8K output tokens per minute. Stay safely below
+// that per request so a single chunk never gets rejected, and rely on retry
+// logic (with Retry-After) for the cross-request cumulative limit.
+const MAX_OUTPUT_TOKENS = 5_000
 
 const PROCESSING_PROMPT = `You are a material processing engine for an AI tutoring system. Your job is to take raw study material text and decompose it into the most granular possible lesson plan — every individual fact, definition, step, mechanism, classification, and sub-concept as its own discrete entry.
 Analyze the following study material and return a JSON object with this exact structure:
@@ -138,6 +142,45 @@ function splitTextIntoChunks(text: string): string[] {
   return chunks
 }
 
+async function callAnthropicWithRetry(
+  anthropic: InstanceType<typeof Anthropic>,
+  prompt: string,
+  chunkIndex: number,
+  maxRetries = 5,
+): Promise<string> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const message = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: MAX_OUTPUT_TOKENS,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      return message.content
+        .filter((block: { type: string }) => block.type === 'text')
+        .map((block: { type: string; text: string }) => block.text)
+        .join('')
+    } catch (err) {
+      lastError = err
+      const errObj = err as { status?: number; headers?: Record<string, string> }
+      const is429 = errObj.status === 429
+      const is529 = errObj.status === 529
+      if (!is429 && !is529) throw err
+
+      // Wait based on Retry-After header if present, else exponential backoff
+      const retryAfterHeader = errObj.headers?.['retry-after']
+      const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null
+      const backoffMs = retryAfterSec && !isNaN(retryAfterSec)
+        ? retryAfterSec * 1000
+        : Math.min(60_000, 2000 * Math.pow(2, attempt))
+
+      console.log(`[process-material] Rate limited on chunk ${chunkIndex + 1} (attempt ${attempt + 1}), waiting ${backoffMs}ms`)
+      await new Promise((resolve) => setTimeout(resolve, backoffMs))
+    }
+  }
+  throw lastError
+}
+
 async function processChunk(
   anthropic: InstanceType<typeof Anthropic>,
   chunkText: string,
@@ -148,21 +191,11 @@ async function processChunk(
     ? `\n\nIMPORTANT CONTEXT: This is chunk ${chunkIndex + 1} of ${totalChunks} from a larger document. Process ONLY the content in this chunk. Use sort_order values starting from ${chunkIndex * 1000} so they can be merged with other chunks later. If a chapter or section appears to continue from a previous chunk, use the EXACT same title so chunks can be merged.\n\n---\n\nHere is the extracted text for this chunk:\n\n`
     : '\n\n---\n\nHere is the extracted text:\n\n'
 
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 16000,
-    messages: [
-      {
-        role: 'user',
-        content: `${PROCESSING_PROMPT}${chunkContext}${chunkText}`,
-      },
-    ],
-  })
-
-  const responseText = message.content
-    .filter((block: { type: string }) => block.type === 'text')
-    .map((block: { type: string; text: string }) => block.text)
-    .join('')
+  const responseText = await callAnthropicWithRetry(
+    anthropic,
+    `${PROCESSING_PROMPT}${chunkContext}${chunkText}`,
+    chunkIndex,
+  )
 
   const jsonMatch = responseText.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {
