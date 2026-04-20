@@ -79,9 +79,11 @@ export default function VoiceSession() {
           console.info('Tab visible again — cancelled pending disconnect teardown')
         }
         // Send a contextual update to signal activity and prevent
-        // ElevenLabs turn timeout from firing.
+        // ElevenLabs turn timeout from firing. The anti-repetition line
+        // protects against the agent restarting the current concept or
+        // looping back to earlier material after a tab switch.
         conversationRef.current?.sendContextualUpdate(
-          'The student switched back to this tab. Continue the conversation normally.'
+          'The student switched back to this tab. Continue from exactly where you left off — do not restart the current concept and do not re-teach anything you have already covered in this session.'
         )
       }
     }
@@ -139,7 +141,7 @@ export default function VoiceSession() {
     const { signedUrl, dynamicVariables } = await getSignedUrl(materialId, sessionIdRef.current)
     if (cancelled.current) return
 
-    const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current)
+    const toolHandler = createSessionToolHandler(user.id, sessionIdRef.current, materialId)
 
     const conversation = await Conversation.startSession({
       signedUrl,

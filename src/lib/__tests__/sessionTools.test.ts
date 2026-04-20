@@ -34,21 +34,22 @@ beforeEach(() => {
 describe('createSessionToolHandler', () => {
   const userId = 'user-abc'
   const sessionId = 'sess-123'
+  const materialId = 'mat-xyz'
 
   it('returns a function', () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     expect(typeof handler).toBe('function')
   })
 
   it('returns ok when called with empty params', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     const result = await handler({})
     expect(result).toBe('ok')
     expect(fromCalls).toHaveLength(0)
   })
 
   it('upserts mastery_state individually for concept_updates', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     const result = await handler({
       concept_updates: [
         { concept_id: 'c1', status: 'mastered' },
@@ -83,7 +84,7 @@ describe('createSessionToolHandler', () => {
   })
 
   it('does not insert intermediate in_progress for in_progress updates', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     await handler({
       concept_updates: [{ concept_id: 'c1', status: 'in_progress' }],
     })
@@ -97,7 +98,7 @@ describe('createSessionToolHandler', () => {
   })
 
   it('upserts session_sections_completed for section_completed', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     await handler({ section_completed: 'sec-1' })
     const sectionCall = fromCalls.find((c) => c.table === 'session_sections_completed')
     expect(sectionCall).toBeDefined()
@@ -112,7 +113,7 @@ describe('createSessionToolHandler', () => {
   })
 
   it('upserts chapter_results for chapter_result', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     await handler({
       chapter_result: { chapter_id: 'ch-1', result: 'mastered' },
     })
@@ -129,7 +130,7 @@ describe('createSessionToolHandler', () => {
   })
 
   it('updates session position', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     await handler({
       position: {
         chapter_id: 'ch-1',
@@ -148,7 +149,7 @@ describe('createSessionToolHandler', () => {
   })
 
   it('handles all params simultaneously', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     const result = await handler({
       concept_updates: [{ concept_id: 'c1', status: 'in_progress' }],
       section_completed: 'sec-2',
@@ -156,12 +157,13 @@ describe('createSessionToolHandler', () => {
       position: { chapter_id: 'ch-3', section_id: 'sec-2', concept_id: 'c1' },
     })
     expect(result).toBe('ok')
-    const tables = fromCalls.map((c) => c.table).sort()
+    // buildStateSnapshot adds an extra chapters read after writes; dedupe.
+    const tables = [...new Set(fromCalls.map((c) => c.table))].sort()
     expect(tables).toEqual(['chapter_results', 'chapters', 'mastery_state', 'sections', 'session_sections_completed', 'sessions'])
   })
 
   it('skips concept_updates when array is empty', async () => {
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     await handler({ concept_updates: [] })
     expect(fromCalls).toHaveLength(0)
   })
@@ -173,7 +175,7 @@ describe('createSessionToolHandler', () => {
     supabaseMod.supabase.from = () => { throw new Error('DB down') }
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     const result = await handler({
       concept_updates: [{ concept_id: 'c1', status: 'mastered' }],
     })
@@ -196,7 +198,7 @@ describe('createSessionToolHandler', () => {
     supabaseMod.supabase.from = () => { throw new Error('DB down') }
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const handler = createSessionToolHandler(userId, sessionId)
+    const handler = createSessionToolHandler(userId, sessionId, materialId)
     const result = await handler({
       section_completed: 'sec-1',
     })
