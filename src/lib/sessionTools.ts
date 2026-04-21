@@ -8,6 +8,77 @@ interface UpdateSessionStateParams {
   position?: { chapter_id: string; section_id: string; concept_id: string }
 }
 
+// Tool return format: send a fresh mastery snapshot back to the agent on every
+// successful write so it re-grounds on what's already covered. Without this
+// the agent relies purely on conversation memory and drifts into re-teaching
+// concepts that were already marked mastered earlier in the session.
+async function buildStateSnapshot(userId: string, materialId: string): Promise<string> {
+  try {
+    const { data: chapters } = await supabase
+      .from('chapters')
+      .select('id')
+      .eq('material_id', materialId)
+
+    const chapterIds = (chapters ?? []).map((c: { id: string }) => c.id)
+    if (!chapterIds.length) return 'ok'
+
+    const { data: sections } = await supabase
+      .from('sections')
+      .select('id')
+      .in('chapter_id', chapterIds)
+
+    const sectionIds = (sections ?? []).map((s: { id: string }) => s.id)
+    if (!sectionIds.length) return 'ok'
+
+    const { data: concepts } = await supabase
+      .from('concepts')
+      .select('id, title')
+      .in('section_id', sectionIds)
+
+    const conceptIds = (concepts ?? []).map((c: { id: string }) => c.id)
+    if (!conceptIds.length) return 'ok'
+
+    const { data: mastery } = await supabase
+      .from('mastery_state')
+      .select('concept_id, status')
+      .eq('user_id', userId)
+      .in('concept_id', conceptIds)
+
+    const titleMap = new Map((concepts ?? []).map((c: { id: string; title: string }) => [c.id, c.title]))
+    const mastered: string[] = []
+    const struggling: string[] = []
+    const skipped: string[] = []
+    const inProgress: string[] = []
+
+    for (const row of (mastery ?? []) as Array<{ concept_id: string; status: string }>) {
+      const title = titleMap.get(row.concept_id)
+      if (!title) continue
+      if (row.status === 'mastered') mastered.push(title)
+      else if (row.status === 'struggling') struggling.push(title)
+      else if (row.status === 'skipped') skipped.push(title)
+      else if (row.status === 'in_progress') inProgress.push(title)
+    }
+
+    const parts: string[] = ['State saved.']
+    if (mastered.length) {
+      parts.push(`Already covered this session — DO NOT re-teach: ${mastered.join(', ')}.`)
+    }
+    if (inProgress.length) {
+      parts.push(`Currently in progress: ${inProgress.join(', ')}.`)
+    }
+    if (struggling.length) {
+      parts.push(`Struggling (revisit only if relevant to what you are teaching now): ${struggling.join(', ')}.`)
+    }
+    if (skipped.length) {
+      parts.push(`Skipped — verify in the next assessment: ${skipped.join(', ')}.`)
+    }
+
+    return parts.length > 1 ? parts.join(' ') : 'ok'
+  } catch {
+    return 'ok'
+  }
+}
+
 const RETRYABLE_ERROR_SNIPPETS = ['timeout', 'network', 'fetch', 'connection', 'temporar']
 
 function isRetryableErrorMessage(message: string): boolean {
@@ -84,10 +155,16 @@ async function fetchPositionTitles(
 // intermediate state first so the trigger doesn't reject the update.
 const NEEDS_IN_PROGRESS_FIRST = new Set<MasteryStatus>(['mastered', 'struggling'])
 
-export function createSessionToolHandler(userId: string, sessionId: string) {
+export function createSessionToolHandler(userId: string, sessionId: string, materialId: string) {
   return async (params: UpdateSessionStateParams): Promise<string> => {
     try {
       const warnings: string[] = []
+      const hadWrites = !!(
+        params.concept_updates?.length ||
+        params.section_completed ||
+        params.chapter_result ||
+        params.position
+      )
 
       // Process concept updates individually so one trigger rejection
       // doesn't block all other updates in the batch.
@@ -259,14 +336,19 @@ export function createSessionToolHandler(userId: string, sessionId: string) {
         }
       }
 
-      // Always return 'ok' to the agent to prevent it from ending the
-      // conversation due to tool errors. Warnings are logged client-side
-      // for debugging but don't disrupt the session flow.
+      // Warnings are logged client-side for debugging but don't disrupt the
+      // session flow — tool return is always a string the agent can read.
       if (warnings.length) {
         console.error('Session tool handler warnings:', warnings)
         emitSessionToolWarnings(sessionId, warnings)
       }
 
+      // Return a fresh mastery snapshot so the agent re-grounds on what's
+      // already been covered and stops re-teaching mastered concepts. On
+      // no-op calls (or fetch failures) we fall back to 'ok'.
+      if (hadWrites) {
+        return await buildStateSnapshot(userId, materialId)
+      }
       return 'ok'
     } catch (err) {
       console.error('Session tool handler error:', err)
